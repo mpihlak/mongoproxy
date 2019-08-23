@@ -2,6 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 
 use std::net::{TcpListener, TcpStream};
 use std::io::{self, Read, Write};
+use std::{thread, time};
 
 
 const BACKEND_ADDR: &str = "localhost:27017";
@@ -9,17 +10,17 @@ const BACKEND_ADDR: &str = "localhost:27017";
 #[derive(Debug)]
 struct MsgHeader {
     message_length: u32,
-    request_id: u32,
-    response_to: u32,
-    op_code: u32,
+    request_id:     u32,
+    response_to:    u32,
+    op_code:        u32,
 }
 
 impl MsgHeader {
     fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
-        let message_length = rdr.read_u32::<LittleEndian>()?;
-        let request_id = rdr.read_u32::<LittleEndian>()?;
-        let response_to = rdr.read_u32::<LittleEndian>()?;
-        let op_code = rdr.read_u32::<LittleEndian>()?;
+        let message_length  = rdr.read_u32::<LittleEndian>()?;
+        let request_id      = rdr.read_u32::<LittleEndian>()?;
+        let response_to     = rdr.read_u32::<LittleEndian>()?;
+        let op_code         = rdr.read_u32::<LittleEndian>()?;
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
     }
 }
@@ -52,7 +53,6 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     println!("connecting to backend: {}", BACKEND_ADDR);
     let mut backend_stream = TcpStream::connect(BACKEND_ADDR)?;
 
-    println!("reading all input from client");
     loop {
         let mut buf = [0; 64];
 
@@ -89,6 +89,8 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
                 println!("error: {}", e);
             },
         }
+
+        thread::sleep(time::Duration::from_millis(1));
     }
         
     /*
