@@ -47,16 +47,20 @@ fn main() {
     }
 }
 
-fn copy_stream(&mut from: TcpStream, &mut to: TcpStream) -> std::io::Result<()> {
+// Copy bytes from one stream to another.
+// Return true if there is more work to do.
+fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
+               output_buf: &mut Vec<u8>) -> std::io::Result<bool> {
     let mut buf = [0; 64];
 
-    match from.read(&mut buf) {
+    match from_stream.read(&mut buf) {
         Ok(len) => {
             if len > 0 {
-                // TODO: handle EWOULDBLOCK
-                to.write(&buf[0..len]);
+                // TODO: handle writes errors, eg. EWOULDBLOCK
+                to_stream.write(&buf[0..len])?;
+                output_buf.extend(&buf[0..len]);
             } else {
-                break;
+                return Ok(false);
             }
         },
         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -64,6 +68,17 @@ fn copy_stream(&mut from: TcpStream, &mut to: TcpStream) -> std::io::Result<()> 
         Err(e) => {
             println!("error: {}", e);
         },
+    }
+    Ok(true)
+}
+
+// Check if there's some parseable data in that buffer.
+fn process_buffer(buf: &Vec<u8>) {
+    if buf.len() >= 16 {
+        match MsgHeader::from_reader(&buf[0..16]) {
+            Ok(header) => println!("got a header: {:?}", header),
+            Err(e) => println!("failed to read a header: {}", e),
+        }
     }
 }
 
@@ -76,21 +91,30 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     client_stream.set_nonblocking(true)?;
     backend_stream.set_nonblocking(true)?;
 
-    loop {
-        copy_stream(&mut client_stream, &mut backend_stream)?;
-        copy_stream(&mut backend_stream, &mut client_stream)?;
+    let mut done = false;
 
+    while !done {
+        // First, take everything the client has and send it to the
+        // backend. Naturally the backend wants to send it's response
+        // back to the client, so handle that next.
+        //
+        let mut data_from_client = Vec::new();
+        if !copy_stream(&mut client_stream, &mut backend_stream, &mut data_from_client)? {
+            println!("client ran out of bytes");
+            done = true;
+        }
+
+        process_buffer(&data_from_client);
+
+        let mut data_from_backend = Vec::new();
+        if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
+            println!("backend ran out of bytes");
+            done = true;
+        }
+
+        // Sleep, as not to hog all CPU.
         thread::sleep(time::Duration::from_millis(1));
     }
-        
-    /*
-    println!("reading the header ...");
-
-    match MsgHeader::from_reader(stream) {
-        Ok(header) => println!("got a header: {:?}", header),
-        Err(e) => println!("failed to read a header: {}", e),
-    }
-    */
 
     Ok(())
 }
