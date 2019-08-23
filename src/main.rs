@@ -47,72 +47,42 @@ fn main() {
     }
 }
 
+fn copy_stream(&mut from: TcpStream, &mut to: TcpStream) -> std::io::Result<()> {
+    let mut buf = [0; 64];
+
+    match from.read(&mut buf) {
+        Ok(len) => {
+            if len > 0 {
+                // TODO: handle EWOULDBLOCK
+                to.write(&buf[0..len]);
+            } else {
+                break;
+            }
+        },
+        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+        },
+        Err(e) => {
+            println!("error: {}", e);
+        },
+    }
+}
+
 fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     println!("new connection from {:?}", client_stream.peer_addr()?);
 
     println!("connecting to backend: {}", BACKEND_ADDR);
     let mut backend_stream = TcpStream::connect(BACKEND_ADDR)?;
 
+    client_stream.set_nonblocking(true)?;
+    backend_stream.set_nonblocking(true)?;
+
     loop {
-        let mut buf = [0; 64];
-
-        client_stream.set_nonblocking(true)?;
-        match client_stream.read(&mut buf) {
-            Ok(len) => {
-                if len > 0 {
-                    backend_stream.set_nonblocking(false);
-                    backend_stream.write(&buf[0..len]);
-                } else {
-                    break;
-                }
-            },
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-            },
-            Err(e) => {
-                println!("error: {}", e);
-            },
-        }
-
-        backend_stream.set_nonblocking(true)?;
-        match backend_stream.read(&mut buf) {
-            Ok(len) => {
-                if len > 0 {
-                    client_stream.set_nonblocking(false);
-                    client_stream.write(&buf[0..len]);
-                } else {
-                    break;
-                }
-            },
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-            },
-            Err(e) => {
-                println!("error: {}", e);
-            },
-        }
+        copy_stream(&mut client_stream, &mut backend_stream)?;
+        copy_stream(&mut backend_stream, &mut client_stream)?;
 
         thread::sleep(time::Duration::from_millis(1));
     }
         
-    /*
-    let mut buf = Vec::new();
-
-    client_stream.read_to_end(&mut buf)?;
-    println!("sending the bytes to the backend");
-    // Send the request to the backend
-    for byte in buf.iter() {
-        backend_stream.write(&[*byte])?;
-    }
-
-    println!("reading backend response and sending it back");
-    // And send the backend's response back to client
-    let mut buf = Vec::new();
-    backend_stream.read_to_end(&mut buf);
-    for byte in buf.iter() {
-        println!("byte: {}", *byte);
-        client_stream.write(&[*byte])?;
-    }
-    */
-
     /*
     println!("reading the header ...");
 
