@@ -119,7 +119,7 @@ impl ParseState {
                 },
                 2013 => {
                     let op = mongodb::MsgOpMsg::from_reader(&self.message_buf[..]);
-                    println!("OP_MSG: {:?}", op);
+                    println!("OP_MSG: {}", op.unwrap());
                 },
                 op_code => {
                     println!("OP {}", op_code);

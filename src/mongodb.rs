@@ -1,6 +1,7 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{self, Read, Error, ErrorKind};
 use bson::{decode_document};
+use std::fmt;
 
 #[derive(Debug)]
 pub struct MsgHeader {
@@ -37,19 +38,28 @@ pub struct MsgOpMsg {
     pub checksum:   u32,
 }
 
+impl fmt::Display for MsgOpMsg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OP_MSG flags: {}, kind: {}, checksum: {}\n",
+               self.flag_bits, self.kind, self.checksum).unwrap();
+        write!(f, "doc: {}", self.doc)
+    }
+}
+
 impl MsgOpMsg {
     pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
         let flag_bits   = rdr.read_u32::<LittleEndian>()?;
         let kind        = rdr.read_u8()?;
 
         if kind != 0 {
-            println!("oh no, kind!=0!");
-            let section_size = rdr.read_i32::<LittleEndian>()?;
-            let seq_id = read_c_string(&mut rdr)?;
-            println!("size={}, seq_id={}", section_size, seq_id);
+            let _section_size = rdr.read_i32::<LittleEndian>()?;
+            let _seq_id = read_c_string(&mut rdr)?;
+            println!("size={}, seq_id={}", _section_size, _seq_id);
         }
 
         let doc = decode_document(&mut rdr).unwrap();
+        // TODO: handle multiple documents
+
         let checksum = if flag_bits & 0x01 == 0x01 { rdr.read_u32::<LittleEndian>()? } else { 0 };
 
         Ok(MsgOpMsg{flag_bits, kind, doc, checksum})
