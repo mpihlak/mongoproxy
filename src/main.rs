@@ -2,7 +2,8 @@ use byteorder::{LittleEndian, ReadBytesExt};
 
 use std::net::{TcpListener, TcpStream};
 use std::io::{self, Read, Write};
-use std::{thread, time};
+use std::{thread, time, str};
+use std::io::{Error, ErrorKind};
 
 
 const BACKEND_ADDR: &str = "localhost:27017";
@@ -33,6 +34,50 @@ impl MsgHeader {
         let op_code         = rdr.read_u32::<LittleEndian>()?;
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
     }
+}
+
+#[derive(Debug)]
+struct MsgOpQuery {
+    flags:  u32,
+    full_collection_name: String,
+    number_to_skip: i32,
+    number_to_return: i32,
+}
+
+impl MsgOpQuery {
+    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+        let flags  = rdr.read_u32::<LittleEndian>()?;
+        let full_collection_name = read_c_string(&mut rdr)?;
+        let number_to_skip = rdr.read_i32::<LittleEndian>()?;
+        let number_to_return = rdr.read_i32::<LittleEndian>()?;
+        Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return})
+    }
+}
+
+#[derive(Debug)]
+struct MsgOpMsg {
+    flag_bits:  u32,
+    checksum:   u32,
+}
+
+impl MsgOpMsg {
+}
+
+fn read_c_string(rdr: impl Read) -> io::Result<String> {
+    let mut bytes = Vec::new();
+    for byte in rdr.bytes() {
+        match byte {
+            Ok(b) if b == 0 => break,
+            Ok(b) => bytes.push(b),
+            Err(e) => return Err(e),
+        }
+    }
+
+    if let Ok(res) = String::from_utf8(bytes) {
+        return Ok(res)
+    }
+
+    Err(Error::new(ErrorKind::Other, "conversion error"))
 }
 
 fn main() {
@@ -66,8 +111,7 @@ fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
     match from_stream.read(&mut buf) {
         Ok(len) => {
             if len > 0 {
-                // TODO: handle write errors, eg. EWOULDBLOCK
-                to_stream.write(&buf[0..len])?;
+                to_stream.write_all(&buf[0..len])?;
                 output_buf.extend_from_slice(&buf[0..len]);
             } else {
                 return Ok(false);
@@ -130,6 +174,17 @@ impl ParseState {
             }
         } else {
             println!("processing payload {} bytes", self.header.message_length - HEADER_LENGTH);
+
+            match self.header.op_code {
+                2004 => {
+                    let opq = MsgOpQuery::from_reader(&self.message_buf[..]);
+                    println!("OP_QUERY: {:?}", opq);
+                },
+                op_code => {
+                    println!("OP {}", op_code);
+                },
+            }
+
             self.have_header = false;
             self.want_bytes = HEADER_LENGTH;
         }
@@ -182,7 +237,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
         backend_parser.parse_buffer(&data_from_backend);
 
         // Sleep, as not to hog all CPU.
-        thread::sleep(time::Duration::from_millis(500));
+        thread::sleep(time::Duration::from_millis(100));
     }
 
     Ok(())
