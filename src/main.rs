@@ -10,8 +10,6 @@ const HEADER_LENGTH: usize = 16;
 
 
 fn main() {
-    println!("a={:?}", mongodb::MsgOpMsg::new());
-
     let listen_addr = "127.0.0.1:27111";
     let listener = TcpListener::bind(listen_addr).unwrap();
 
@@ -80,6 +78,12 @@ impl ParseState {
     // The buffer that is passed to parsing is a segment from a stream
     // of bytes, so we try to assemble this into a complete message and
     // parse that.
+    //
+    // The first message we always want to see is the MongoDb message header.
+    // This header in turn contains the length of the message that follows. So
+    // we try to read message length worth of bytes and parse the message. Once
+    // the message is parsed we expect a header again and so it goes.
+    //
     fn parse_buffer(&mut self, buf: &Vec<u8>) {
         self.message_buf.extend(buf.iter().take(self.want_bytes));
         
@@ -108,8 +112,12 @@ impl ParseState {
 
             match self.header.op_code {
                 2004 => {
-                    let opq = mongodb::MsgOpQuery::from_reader(&self.message_buf[..]);
-                    println!("OP_QUERY: {:?}", opq);
+                    let op = mongodb::MsgOpQuery::from_reader(&self.message_buf[..]);
+                    println!("OP_QUERY: {:?}", op);
+                },
+                2013 => {
+                    let op = mongodb::MsgOpMsg::from_reader(&self.message_buf[..]);
+                    println!("OP_MSG: {:?}", op);
                 },
                 op_code => {
                     println!("OP {}", op_code);

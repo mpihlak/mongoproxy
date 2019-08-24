@@ -1,17 +1,6 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{self, Read, Error, ErrorKind};
-
-#[derive(Debug)]
-pub struct MsgOpMsg {
-    pub flag_bits:  u32,
-    pub checksum:   u32,
-}
-
-impl MsgOpMsg {
-    pub fn new() -> MsgOpMsg {
-        MsgOpMsg{ flag_bits: 0, checksum: 1 }
-    }
-}
+use bson::{decode_document};
 
 #[derive(Debug)]
 pub struct MsgHeader {
@@ -37,6 +26,33 @@ impl MsgHeader {
         let response_to     = rdr.read_u32::<LittleEndian>()?;
         let op_code         = rdr.read_u32::<LittleEndian>()?;
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
+    }
+}
+
+#[derive(Debug)]
+pub struct MsgOpMsg {
+    pub flag_bits:  u32,
+    pub kind:       u8,
+    pub doc:        bson::Document,
+    pub checksum:   u32,
+}
+
+impl MsgOpMsg {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+        let flag_bits   = rdr.read_u32::<LittleEndian>()?;
+        let kind        = rdr.read_u8()?;
+
+        if kind != 0 {
+            println!("oh no, kind!=0!");
+            let section_size = rdr.read_i32::<LittleEndian>()?;
+            let seq_id = read_c_string(&mut rdr)?;
+            println!("size={}, seq_id={}", section_size, seq_id);
+        }
+
+        let doc = decode_document(&mut rdr).unwrap();
+        let checksum = if flag_bits & 0x01 == 0x01 { rdr.read_u32::<LittleEndian>()? } else { 0 };
+
+        Ok(MsgOpMsg{flag_bits, kind, doc, checksum})
     }
 }
 
