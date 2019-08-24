@@ -4,9 +4,7 @@ use std::{thread, time, str};
 
 mod mongodb;
 
-
 const BACKEND_ADDR: &str = "localhost:27017";
-
 
 fn main() {
     let listen_addr = "127.0.0.1:27111";
@@ -32,30 +30,11 @@ fn main() {
     }
 }
 
-// Copy bytes from one stream to another.
-// Return true if there is more work to do.
-fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
-               output_buf: &mut Vec<u8>) -> std::io::Result<bool> {
-    let mut buf = [0; 64];
-
-    match from_stream.read(&mut buf) {
-        Ok(len) => {
-            if len > 0 {
-                to_stream.write_all(&buf[0..len])?;
-                output_buf.extend_from_slice(&buf[0..len]);
-            } else {
-                return Ok(false);
-            }
-        },
-        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-        },
-        Err(e) => {
-            println!("error: {}", e);
-        },
-    }
-    Ok(true)
-}
-
+// Main proxy logic. Open a connection to the backend and start passing bytes
+// between the client and the backend. Also split the traffic to MongoDb protocol
+// parser, so that we can get some stats out of this.
+//
+// TODO: Convert this to async IO or some form of epoll (mio?)
 fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     println!("new connection from {:?}", client_stream.peer_addr()?);
     println!("connecting to backend: {}", BACKEND_ADDR);
@@ -91,3 +70,29 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     Ok(())
 }
 
+// Copy bytes from one stream to another. Collect the processed bytes
+// to "output_buf" for further processing.
+//
+// Return false on EOF
+//
+fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
+               output_buf: &mut Vec<u8>) -> std::io::Result<bool> {
+    let mut buf = [0; 64];
+
+    match from_stream.read(&mut buf) {
+        Ok(len) => {
+            if len > 0 {
+                to_stream.write_all(&buf[0..len])?;
+                output_buf.extend_from_slice(&buf[0..len]);
+            } else {
+                return Ok(false);
+            }
+        },
+        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+        },
+        Err(e) => {
+            println!("error: {}", e);
+        },
+    }
+    Ok(true)
+}

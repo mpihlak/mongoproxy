@@ -8,15 +8,15 @@ const HEADER_LENGTH: usize = 16;
 
 
 #[derive(Debug)]
-pub struct MsgHeader {
-    pub message_length: usize,
-    pub request_id:     u32,
-    pub response_to:    u32,
-    pub op_code:        u32,
+struct MsgHeader {
+    message_length: usize,
+    request_id:     u32,
+    response_to:    u32,
+    op_code:        u32,
 }
 
 impl MsgHeader {
-    pub fn new() -> MsgHeader {
+    fn new() -> MsgHeader {
         MsgHeader{
             message_length: 0,
             request_id: 0,
@@ -25,7 +25,7 @@ impl MsgHeader {
         }
     }
 
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
         let message_length  = rdr.read_u32::<LittleEndian>()? as usize;
         let request_id      = rdr.read_u32::<LittleEndian>()?;
         let response_to     = rdr.read_u32::<LittleEndian>()?;
@@ -35,11 +35,11 @@ impl MsgHeader {
 }
 
 #[derive(Debug)]
-pub struct MsgOpMsg {
-    pub flag_bits:  u32,
-    pub kind:       u8,
-    pub doc:        bson::Document,
-    pub checksum:   u32,
+struct MsgOpMsg {
+    flag_bits:  u32,
+    kind:       u8,
+    doc:        bson::Document,
+    checksum:   u32,
 }
 
 impl fmt::Display for MsgOpMsg {
@@ -51,7 +51,7 @@ impl fmt::Display for MsgOpMsg {
 }
 
 impl MsgOpMsg {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
         let flag_bits   = rdr.read_u32::<LittleEndian>()?;
         let kind        = rdr.read_u8()?;
 
@@ -71,15 +71,15 @@ impl MsgOpMsg {
 }
 
 #[derive(Debug)]
-pub struct MsgOpQuery {
-    pub flags:  u32,
-    pub full_collection_name: String,
-    pub number_to_skip: i32,
-    pub number_to_return: i32,
+struct MsgOpQuery {
+    flags:  u32,
+    full_collection_name: String,
+    number_to_skip: i32,
+    number_to_return: i32,
 }
 
 impl MsgOpQuery {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
         let flags  = rdr.read_u32::<LittleEndian>()?;
         let full_collection_name = read_c_string(&mut rdr)?;
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
