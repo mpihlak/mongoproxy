@@ -159,7 +159,8 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     backend_stream.set_nonblocking(true)?;
 
     let mut done = false;
-    let mut parser = ParseState::new();
+    let mut client_parser = ParseState::new();
+    let mut backend_parser = ParseState::new();
 
     while !done {
         // First, take everything the client has and send it to the
@@ -172,13 +173,15 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
             done = true;
         }
 
-        parser = parser.parse_buffer(&data_from_client);
+        client_parser = client_parser.parse_buffer(&data_from_client);
 
         let mut data_from_backend = Vec::new();
         if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
             println!("backend ran out of bytes");
             done = true;
         }
+
+        backend_parser = backend_parser.parse_buffer(&data_from_backend);
 
         // Sleep, as not to hog all CPU.
         thread::sleep(time::Duration::from_millis(500));
