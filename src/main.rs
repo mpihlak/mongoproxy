@@ -105,12 +105,12 @@ impl ParseState {
     // The buffer that is passed to parsing is a segment from a stream
     // of bytes, so we try to assemble this into a complete message and
     // parse that.
-    fn parse_buffer(mut self, buf: &Vec<u8>) -> ParseState {
+    fn parse_buffer(&mut self, buf: &Vec<u8>) {
         self.message_buf.extend(buf.iter().take(self.want_bytes));
         
         if buf.len() < self.want_bytes {
             self.want_bytes -= buf.len();
-            return self;
+            return;
         }
 
         let surplus_buf = &buf[self.want_bytes..];
@@ -144,8 +144,6 @@ impl ParseState {
         assert!(surplus_buf.len() <= self.want_bytes);
         self.message_buf = surplus_buf.to_vec();
         self.want_bytes -= surplus_buf.len();
-
-        self
     }
 }
 
@@ -173,7 +171,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
             done = true;
         }
 
-        client_parser = client_parser.parse_buffer(&data_from_client);
+        client_parser.parse_buffer(&data_from_client);
 
         let mut data_from_backend = Vec::new();
         if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
@@ -181,7 +179,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
             done = true;
         }
 
-        backend_parser = backend_parser.parse_buffer(&data_from_backend);
+        backend_parser.parse_buffer(&data_from_backend);
 
         // Sleep, as not to hog all CPU.
         thread::sleep(time::Duration::from_millis(500));
