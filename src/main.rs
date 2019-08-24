@@ -19,10 +19,12 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                match handle_connection(stream) {
-                    Ok(_) => println!("done with it"),
-                    Err(e) => println!("err: {}", e),
-                }
+                thread::spawn(|| {
+                    match handle_connection(stream) {
+                        Ok(_) => println!("closing connection."),
+                        Err(e) => println!("connection error: {}", e),
+                    };
+                });
             },
             Err(e) => {
                 println!("accept: {:?}", e)
@@ -143,7 +145,6 @@ impl ParseState {
 
 fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     println!("new connection from {:?}", client_stream.peer_addr()?);
-
     println!("connecting to backend: {}", BACKEND_ADDR);
     let mut backend_stream = TcpStream::connect(BACKEND_ADDR)?;
 
@@ -155,10 +156,6 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     let mut backend_parser = ParseState::new();
 
     while !done {
-        // First, take everything the client has and send it to the
-        // backend. Naturally the backend wants to send it's response
-        // back to the client, so handle that next.
-        //
         let mut data_from_client = Vec::new();
         if !copy_stream(&mut client_stream, &mut backend_stream, &mut data_from_client)? {
             println!("client ran out of bytes");
@@ -175,8 +172,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
 
         backend_parser.parse_buffer(&data_from_backend);
 
-        // Sleep, as not to hog all CPU.
-        thread::sleep(time::Duration::from_millis(100));
+        thread::sleep(time::Duration::from_millis(1));
     }
 
     Ok(())
