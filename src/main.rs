@@ -6,7 +6,6 @@ mod mongodb;
 
 
 const BACKEND_ADDR: &str = "localhost:27017";
-const HEADER_LENGTH: usize = 16;
 
 
 fn main() {
@@ -57,92 +56,6 @@ fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
     Ok(true)
 }
 
-struct ParseState {
-    header: mongodb::MsgHeader,
-    have_header: bool,
-    want_bytes: usize,      // How many more bytes do we need for a complete message
-    message_buf: Vec<u8>,   // Accumulated message bytes, parseable when we have all want_bytes
-}
-
-impl ParseState {
-
-    fn new() -> ParseState {
-        ParseState{
-            header: mongodb::MsgHeader::new(),
-            have_header: false,
-            want_bytes: HEADER_LENGTH,
-            message_buf: Vec::new(),
-        }
-    }
-
-    // Parse the buffer and advance the internal state
-    //
-    // The buffer that is passed to parsing is a segment from a stream
-    // of bytes, so we try to assemble this into a complete message and
-    // parse that.
-    //
-    // The first message we always want to see is the MongoDb message header.
-    // This header in turn contains the length of the message that follows. So
-    // we try to read message length worth of bytes and parse the message. Once
-    // the message is parsed we expect a header again and so it goes.
-    //
-    fn parse_buffer(&mut self, buf: &Vec<u8>) {
-        self.message_buf.extend(buf.iter().take(self.want_bytes));
-        
-        if buf.len() < self.want_bytes {
-            self.want_bytes -= buf.len();
-            return;
-        }
-
-        let surplus_buf = &buf[self.want_bytes..];
-
-        if !self.have_header {
-            match mongodb::MsgHeader::from_reader(&self.message_buf[..]) {
-                Ok(header) => {
-                    self.header = header;
-                    self.have_header = true;
-                    self.want_bytes = self.header.message_length - HEADER_LENGTH;
-                    println!("parse: got a header: {:?}, want {} more bytes",
-                             self.header, self.want_bytes);
-                },
-                Err(e) => {
-                    println!("parse: failed to read a header: {}", e);
-                },
-            }
-        } else {
-            println!("processing payload {} bytes", self.header.message_length - HEADER_LENGTH);
-
-            match self.header.op_code {
-                2004 => {
-                    let op = mongodb::MsgOpQuery::from_reader(&self.message_buf[..]);
-                    println!("OP_QUERY: {:?}", op);
-                },
-                2013 => {
-                    let op = mongodb::MsgOpMsg::from_reader(&self.message_buf[..]);
-                    println!("OP_MSG: {}", op.unwrap());
-                },
-                op_code => {
-                    println!("OP {}", op_code);
-                },
-            }
-
-            self.have_header = false;
-            self.want_bytes = HEADER_LENGTH;
-        }
-
-        // Now deal with the remainder of the buffer
-        //
-        // Note that surplus_buf may actually contain multiple messages when the input buffer is
-        // large and the messages to be parsed are small.
-        //
-        // Not ready to deal with that just yet, so just assert that this doesn't happen.
-        //
-        assert!(surplus_buf.len() <= self.want_bytes);
-        self.message_buf = surplus_buf.to_vec();
-        self.want_bytes -= surplus_buf.len();
-    }
-}
-
 fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     println!("new connection from {:?}", client_stream.peer_addr()?);
     println!("connecting to backend: {}", BACKEND_ADDR);
@@ -152,8 +65,8 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     backend_stream.set_nonblocking(true)?;
 
     let mut done = false;
-    let mut client_parser = ParseState::new();
-    let mut backend_parser = ParseState::new();
+    let mut client_parser = mongodb::MongoProtocolParser::new();
+    let mut backend_parser = mongodb::MongoProtocolParser::new();
 
     while !done {
         let mut data_from_client = Vec::new();
