@@ -1,86 +1,17 @@
-use byteorder::{LittleEndian, ReadBytesExt};
-
 use std::net::{TcpListener, TcpStream};
 use std::io::{self, Read, Write};
 use std::{thread, time, str};
-use std::io::{Error, ErrorKind};
+
+mod mongodb;
 
 
 const BACKEND_ADDR: &str = "localhost:27017";
 const HEADER_LENGTH: usize = 16;
 
-#[derive(Debug)]
-struct MsgHeader {
-    message_length: usize,
-    request_id:     u32,
-    response_to:    u32,
-    op_code:        u32,
-}
-
-impl MsgHeader {
-    fn new() -> MsgHeader {
-        MsgHeader{
-            message_length: 0,
-            request_id: 0,
-            response_to: 0,
-            op_code: 0
-        }
-    }
-
-    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
-        let message_length  = rdr.read_u32::<LittleEndian>()? as usize;
-        let request_id      = rdr.read_u32::<LittleEndian>()?;
-        let response_to     = rdr.read_u32::<LittleEndian>()?;
-        let op_code         = rdr.read_u32::<LittleEndian>()?;
-        Ok(MsgHeader{message_length, request_id, response_to, op_code})
-    }
-}
-
-#[derive(Debug)]
-struct MsgOpQuery {
-    flags:  u32,
-    full_collection_name: String,
-    number_to_skip: i32,
-    number_to_return: i32,
-}
-
-impl MsgOpQuery {
-    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
-        let flags  = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_c_string(&mut rdr)?;
-        let number_to_skip = rdr.read_i32::<LittleEndian>()?;
-        let number_to_return = rdr.read_i32::<LittleEndian>()?;
-        Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return})
-    }
-}
-
-#[derive(Debug)]
-struct MsgOpMsg {
-    flag_bits:  u32,
-    checksum:   u32,
-}
-
-impl MsgOpMsg {
-}
-
-fn read_c_string(rdr: impl Read) -> io::Result<String> {
-    let mut bytes = Vec::new();
-    for byte in rdr.bytes() {
-        match byte {
-            Ok(b) if b == 0 => break,
-            Ok(b) => bytes.push(b),
-            Err(e) => return Err(e),
-        }
-    }
-
-    if let Ok(res) = String::from_utf8(bytes) {
-        return Ok(res)
-    }
-
-    Err(Error::new(ErrorKind::Other, "conversion error"))
-}
 
 fn main() {
+    println!("a={:?}", mongodb::MsgOpMsg::new());
+
     let listen_addr = "127.0.0.1:27111";
     let listener = TcpListener::bind(listen_addr).unwrap();
 
@@ -127,7 +58,7 @@ fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
 }
 
 struct ParseState {
-    header: MsgHeader,
+    header: mongodb::MsgHeader,
     have_header: bool,
     want_bytes: usize,      // How many more bytes do we need for a complete message
     message_buf: Vec<u8>,   // Accumulated message bytes, parseable when we have all want_bytes
@@ -137,7 +68,7 @@ impl ParseState {
 
     fn new() -> ParseState {
         ParseState{
-            header: MsgHeader::new(),
+            header: mongodb::MsgHeader::new(),
             have_header: false,
             want_bytes: HEADER_LENGTH,
             message_buf: Vec::new(),
@@ -160,7 +91,7 @@ impl ParseState {
         let surplus_buf = &buf[self.want_bytes..];
 
         if !self.have_header {
-            match MsgHeader::from_reader(&self.message_buf[..]) {
+            match mongodb::MsgHeader::from_reader(&self.message_buf[..]) {
                 Ok(header) => {
                     self.header = header;
                     self.have_header = true;
@@ -177,7 +108,7 @@ impl ParseState {
 
             match self.header.op_code {
                 2004 => {
-                    let opq = MsgOpQuery::from_reader(&self.message_buf[..]);
+                    let opq = mongodb::MsgOpQuery::from_reader(&self.message_buf[..]);
                     println!("OP_QUERY: {:?}", opq);
                 },
                 op_code => {
