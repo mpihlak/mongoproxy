@@ -132,7 +132,7 @@ impl MongoProtocolParser {
     // The first message we always want to see is the MongoDb message header.
     // This header in turn contains the length of the message that follows. So
     // we try to read message length worth of bytes and parse the message. Once
-    // the message is parsed we expect a header again and so it goes.
+    // the message is parsed we expect a header again and the process repeats.
     //
     pub fn parse_buffer(&mut self, buf: &Vec<u8>) {
         self.message_buf.extend(buf.iter().take(self.want_bytes));
@@ -142,7 +142,9 @@ impl MongoProtocolParser {
             return;
         }
 
-        let surplus_buf = &buf[self.want_bytes..];
+        // buf now contains the surplus bytes, so that we might take
+        // another pass at it.
+        let buf = &buf[self.want_bytes..];
 
         if !self.have_header {
             match MsgHeader::from_reader(&self.message_buf[..]) {
@@ -180,15 +182,15 @@ impl MongoProtocolParser {
 
         // Now deal with the remainder of the buffer
         //
-        // Note that surplus_buf may actually contain multiple messages when the input buffer is
+        // Note that surplus buf may actually contain multiple messages when the input buffer is
         // large and the messages to be parsed are small.
         //
         // Not ready to deal with that just yet, so just assert that this doesn't happen.
         // TODO: implement this, as it really does happen.
         //
-        assert!(surplus_buf.len() <= self.want_bytes);
-        self.message_buf = surplus_buf.to_vec();
-        self.want_bytes -= surplus_buf.len();
+        assert!(buf.len() <= self.want_bytes);
+        self.message_buf = buf.to_vec();
+        self.want_bytes -= buf.len();
     }
 }
 
