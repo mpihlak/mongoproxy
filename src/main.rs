@@ -85,8 +85,8 @@ fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
 struct ParseState {
     header: MsgHeader,
     have_header: bool,
-    want_bytes: usize,
-    message_start: usize,
+    want_bytes: usize,      // How many more bytes do we need for a complete message
+    message_buf: Vec<u8>,   // Accumulated message bytes, parseable when we have all want_bytes
 }
 
 impl ParseState {
@@ -96,25 +96,30 @@ impl ParseState {
             header: MsgHeader::new(),
             have_header: false,
             want_bytes: HEADER_LENGTH,
-            message_start: 0,
+            message_buf: Vec::new(),
         }
     }
 
     // Parse the buffer and advance the internal state
+    //
+    // The buffer that is passed to parsing is a segment from a stream
+    // of bytes, so we try to assemble this into a complete message and
+    // parse that.
     fn parse_buffer(mut self, buf: &Vec<u8>) -> ParseState {
-        let have_bytes = buf.len() - self.message_start;
-        let message_end = self.message_start + self.want_bytes;
-
-        if have_bytes < self.want_bytes {
-            return self
+        self.message_buf.extend(buf.iter().take(self.want_bytes));
+        
+        if buf.len() < self.want_bytes {
+            self.want_bytes -= buf.len();
+            return self;
         }
 
+        let surplus_buf = &buf[self.want_bytes..];
+
         if !self.have_header {
-            match MsgHeader::from_reader(&buf[self.message_start..message_end]) {
+            match MsgHeader::from_reader(&self.message_buf[..]) {
                 Ok(header) => {
                     self.header = header;
                     self.have_header = true;
-                    self.message_start += self.want_bytes;
                     self.want_bytes = self.header.message_length - HEADER_LENGTH;
                     println!("parse: got a header: {:?}, want {} more bytes",
                              self.header, self.want_bytes);
@@ -124,11 +129,22 @@ impl ParseState {
                 },
             }
         } else {
-            println!("processing payload {} bytes", self.want_bytes);
-            self.message_start = message_end;
+            println!("processing payload {} bytes", self.header.message_length - HEADER_LENGTH);
             self.have_header = false;
             self.want_bytes = HEADER_LENGTH;
-        } 
+        }
+
+        // Now deal with the remainder of the buffer
+        //
+        // Note that surplus_buf may actually contain multiple messages when the input buffer is
+        // large and the messages to be parsed are small.
+        //
+        // Not ready to deal with that just yet, so just assert that this doesn't happen.
+        //
+        assert!(surplus_buf.len() <= self.want_bytes);
+        self.message_buf = surplus_buf.to_vec();
+        self.want_bytes -= surplus_buf.len();
+
         self
     }
 }
@@ -145,17 +161,12 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     let mut done = false;
     let mut parser = ParseState::new();
 
-    // Currently these buffers accumulate everything the stream has provided
-    // since the creation of the connection. This means that we need to keep
-    // some offset in the ParseState to signify where the next message begins.
-    let mut data_from_client = Vec::new();
-    let mut data_from_backend = Vec::new();
-
     while !done {
         // First, take everything the client has and send it to the
         // backend. Naturally the backend wants to send it's response
         // back to the client, so handle that next.
         //
+        let mut data_from_client = Vec::new();
         if !copy_stream(&mut client_stream, &mut backend_stream, &mut data_from_client)? {
             println!("client ran out of bytes");
             done = true;
@@ -163,6 +174,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
 
         parser = parser.parse_buffer(&data_from_client);
 
+        let mut data_from_backend = Vec::new();
         if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
             println!("backend ran out of bytes");
             done = true;
