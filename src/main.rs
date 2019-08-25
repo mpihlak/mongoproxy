@@ -70,21 +70,20 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     Ok(())
 }
 
-// Copy bytes from one stream to another. Return the processed bytes in buf.
-//
-// TODO: Use a user supplied buffer so that we're not unnecessarily 
-// creating new vectors all the time.
+// Copy bytes from one stream to another. Collect the processed bytes
+// to "output_buf" for further processing.
 //
 // Return false on EOF
 //
 fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
-               &mut buf: Vec<u8>) -> std::io::Result<bool> {
+               output_buf: &mut Vec<u8>) -> std::io::Result<bool> {
+    let mut buf = [0; 64];
 
-    buf.clear();
     match from_stream.read(&mut buf) {
         Ok(len) => {
             if len > 0 {
-                to_stream.write_all(&buf)?;
+                to_stream.write_all(&buf[0..len])?;
+                output_buf.extend_from_slice(&buf[0..len]);
             } else {
                 return Ok(false);
             }
