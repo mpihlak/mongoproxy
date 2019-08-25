@@ -50,7 +50,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     while !done {
         let mut data_from_client = Vec::new();
         if !copy_stream(&mut client_stream, &mut backend_stream, &mut data_from_client)? {
-            println!("client ran out of bytes");
+            println!("{} client EOF", client_stream.peer_addr()?);
             done = true;
         }
 
@@ -58,7 +58,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
 
         let mut data_from_backend = Vec::new();
         if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
-            println!("backend ran out of bytes");
+            println!("{} backend EOF", backend_stream.peer_addr()?);
             done = true;
         }
 
@@ -72,6 +72,9 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
 
 // Copy bytes from one stream to another. Collect the processed bytes
 // to "output_buf" for further processing.
+//
+// TODO: Use a user supplied buffer so that we're not unnecessarily 
+// creating new vectors all the time.
 //
 // Return false on EOF
 //
