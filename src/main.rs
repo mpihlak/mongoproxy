@@ -48,8 +48,8 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     backend_stream.set_nonblocking(true)?;
 
     let mut done = false;
-    let mut client_parser = mongodb::MongoProtocolParser::new();
-    let mut backend_parser = mongodb::MongoProtocolParser::new();
+    let mut client_parser = mongodb::parser::MongoProtocolParser::new();
+    let mut backend_parser = mongodb::parser::MongoProtocolParser::new();
 
     while !done {
         let mut data_from_client = Vec::new();

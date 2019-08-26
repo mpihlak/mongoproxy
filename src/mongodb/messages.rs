@@ -5,19 +5,19 @@ use std::fmt;
 use log::{debug,info,warn};
 
 
-const HEADER_LENGTH: usize = 16;
+pub const HEADER_LENGTH: usize = 16;
 
 
 #[derive(Debug)]
-struct MsgHeader {
-    message_length: usize,
-    request_id:     u32,
-    response_to:    u32,
-    op_code:        u32,
+pub struct MsgHeader {
+    pub message_length: usize,
+    pub request_id:     u32,
+    pub response_to:    u32,
+    pub op_code:        u32,
 }
 
 impl MsgHeader {
-    fn new() -> MsgHeader {
+    pub fn new() -> MsgHeader {
         MsgHeader{
             message_length: 0,
             request_id: 0,
@@ -26,7 +26,7 @@ impl MsgHeader {
         }
     }
 
-    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
         let message_length  = rdr.read_u32::<LittleEndian>()? as usize;
         let request_id      = rdr.read_u32::<LittleEndian>()?;
         let response_to     = rdr.read_u32::<LittleEndian>()?;
@@ -36,7 +36,7 @@ impl MsgHeader {
 }
 
 #[derive(Debug)]
-struct MsgOpMsg {
+pub struct MsgOpMsg {
     flag_bits:  u32,
     kind:       u8,
     sections:   Vec<bson::Document>,
@@ -55,7 +55,7 @@ impl fmt::Display for MsgOpMsg {
 }
 
 impl MsgOpMsg {
-    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
         let flag_bits   = rdr.read_u32::<LittleEndian>()?;
         let kind        = rdr.read_u8()?;
 
@@ -81,7 +81,7 @@ impl MsgOpMsg {
 }
 
 #[derive(Debug)]
-struct MsgOpQuery {
+pub struct MsgOpQuery {
     flags:  u32,
     full_collection_name: String,
     number_to_skip: i32,
@@ -89,7 +89,7 @@ struct MsgOpQuery {
 }
 
 impl MsgOpQuery {
-    fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
         let flags  = rdr.read_u32::<LittleEndian>()?;
         let full_collection_name = read_c_string(&mut rdr)?;
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
@@ -152,7 +152,7 @@ impl MongoProtocolParser {
 
         loop {
             self.message_buf.extend(work_buf.iter().take(self.want_bytes));
-            
+
             if work_buf.len() < self.want_bytes {
                 self.want_bytes -= work_buf.len();
                 return;
