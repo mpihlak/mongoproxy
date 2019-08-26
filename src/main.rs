@@ -73,6 +73,9 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
 // Copy bytes from one stream to another. Collect the processed bytes
 // to "output_buf" for further processing.
 //
+// TODO: Use a user supplied buffer, so that we're no unnecessarily allocating
+// and copying bytes around.
+//
 // Return false on EOF
 //
 fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
