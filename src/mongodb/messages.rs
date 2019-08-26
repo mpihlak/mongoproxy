@@ -60,10 +60,7 @@ impl MsgOpMsg {
         if kind != 0 {
             let _section_size = rdr.read_i32::<LittleEndian>()?;
             let _seq_id = read_c_string(&mut rdr)?;
-            info!("---------------------------------------------------------");
             info!("section_size={}, seq_id={}", _section_size, _seq_id);
-            info!("---------------------------------------------------------");
-            // XXX: is every section actually preceeded by this header?
         }
 
         let mut sections = Vec::new();
