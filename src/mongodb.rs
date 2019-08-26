@@ -1,6 +1,6 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{self, Read, Error, ErrorKind};
-use bson::{decode_document};
+use bson::{decode_document, Document, DecoderError};
 use std::fmt;
 
 
@@ -38,15 +38,18 @@ impl MsgHeader {
 struct MsgOpMsg {
     flag_bits:  u32,
     kind:       u8,
-    doc:        bson::Document,
-    checksum:   u32,
+    sections:   Vec<bson::Document>,
 }
 
 impl fmt::Display for MsgOpMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_MSG flags: {}, kind: {}, checksum: {}\n",
-               self.flag_bits, self.kind, self.checksum).unwrap();
-        write!(f, "doc: {}", self.doc)
+        write!(f, "OP_MSG flags: {}, kind: {}\n",
+               self.flag_bits, self.kind).unwrap();
+
+        for (i, v)  in self.sections.iter().enumerate() {
+            write!(f, "section {}: {}", i, v);
+        }
+        write!(f, ".")
     }
 }
 
@@ -58,15 +61,21 @@ impl MsgOpMsg {
         if kind != 0 {
             let _section_size = rdr.read_i32::<LittleEndian>()?;
             let _seq_id = read_c_string(&mut rdr)?;
-            println!("size={}, seq_id={}", _section_size, _seq_id);
+            println!("---------------------------------------------------------");
+            println!("section_size={}, seq_id={}", _section_size, _seq_id);
+            println!("---------------------------------------------------------");
+            // XXX: is every section actually preceeded by this header?
         }
 
-        let doc = decode_document(&mut rdr).unwrap();
-        // TODO: handle multiple documents
+        let mut sections = Vec::new();
+        while let Ok(doc) = decode_document(&mut rdr) {
+            sections.push(doc);
+        }
 
-        let checksum = if flag_bits & 0x01 == 0x01 { rdr.read_u32::<LittleEndian>()? } else { 0 };
+        // Note: there may be checksum following, but we've probably eaten
+        // it's bytes while trying to decode the section list.
 
-        Ok(MsgOpMsg{flag_bits, kind, doc, checksum})
+        Ok(MsgOpMsg{flag_bits, kind, sections})
     }
 }
 
