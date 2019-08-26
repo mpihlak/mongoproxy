@@ -2,6 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{self, Read, Error, ErrorKind};
 use bson::{decode_document};
 use std::fmt;
+use log::{debug,info,warn};
 
 
 const HEADER_LENGTH: usize = 16;
@@ -61,9 +62,9 @@ impl MsgOpMsg {
         if kind != 0 {
             let _section_size = rdr.read_i32::<LittleEndian>()?;
             let _seq_id = read_c_string(&mut rdr)?;
-            println!("---------------------------------------------------------");
-            println!("section_size={}, seq_id={}", _section_size, _seq_id);
-            println!("---------------------------------------------------------");
+            info!("---------------------------------------------------------");
+            info!("section_size={}, seq_id={}", _section_size, _seq_id);
+            info!("---------------------------------------------------------");
             // XXX: is every section actually preceeded by this header?
         }
 
@@ -160,38 +161,38 @@ impl MongoProtocolParser {
             // We have some surplus data, we'll get to that in the next loops
             work_buf = &work_buf[self.want_bytes..];
 
-            println!("bytes in buffer: {}, bytes in message: {}, want: {}",
+            debug!("bytes in buffer: {}, bytes in message: {}, want: {}",
                      work_buf.len(), self.message_buf.len(), self.want_bytes);
 
             if !self.have_header {
                 match MsgHeader::from_reader(&self.message_buf[..]) {
                     Ok(header) => {
-                        println!("parse: got a header: {:?}", header);
+                        debug!("parse: got a header: {:?}", header);
                         assert!(header.message_length >= HEADER_LENGTH);
 
                         self.header = header;
                         self.have_header = true;
                         self.want_bytes = self.header.message_length - HEADER_LENGTH;
-                        println!("want {} more bytes", self.want_bytes);
+                        debug!("want {} more bytes", self.want_bytes);
                     },
                     Err(e) => {
-                        println!("parse: failed to read a header: {}", e);
+                        warn!("parse: failed to read a header: {}", e);
                     },
                 }
             } else {
-                println!("processing payload {} bytes", self.header.message_length - HEADER_LENGTH);
+                debug!("processing payload {} bytes", self.header.message_length - HEADER_LENGTH);
 
                 match self.header.op_code {
                     2004 => {
                         let op = MsgOpQuery::from_reader(&self.message_buf[..]);
-                        println!("OP_QUERY: {:?}", op);
+                        info!("OP_QUERY: {:?}", op);
                     },
                     2013 => {
                         let op = MsgOpMsg::from_reader(&self.message_buf[..]);
-                        println!("OP_MSG: {}", op.unwrap());
+                        info!("OP_MSG: {}", op.unwrap());
                     },
                     op_code => {
-                        println!("OP {}", op_code);
+                        info!("OP {}", op_code);
                     },
                 }
 

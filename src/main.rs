@@ -1,31 +1,34 @@
 use std::net::{TcpListener, TcpStream};
 use std::io::{self, Read, Write};
 use std::{thread, time, str};
-use log;
+use log::{info,warn};
+use env_logger;
 
 mod mongodb;
 
 const BACKEND_ADDR: &str = "localhost:27017";
 
 fn main() {
+    env_logger::init();
+
     let listen_addr = "127.0.0.1:27111";
     let listener = TcpListener::bind(listen_addr).unwrap();
 
-    println!("Listening on {}", listen_addr);
-    println!("^C to exit");
+    info!("Listening on {}", listen_addr);
+    info!("^C to exit");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 thread::spawn(|| {
                     match handle_connection(stream) {
-                        Ok(_) => println!("closing connection."),
-                        Err(e) => println!("connection error: {}", e),
+                        Ok(_) => info!("closing connection."),
+                        Err(e) => warn!("connection error: {}", e),
                     };
                 });
             },
             Err(e) => {
-                println!("accept: {:?}", e)
+                warn!("accept: {:?}", e)
             },
         }
     }
@@ -37,8 +40,8 @@ fn main() {
 //
 // TODO: Convert this to async IO or some form of epoll (mio?)
 fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
-    println!("new connection from {:?}", client_stream.peer_addr()?);
-    println!("connecting to backend: {}", BACKEND_ADDR);
+    info!("new connection from {:?}", client_stream.peer_addr()?);
+    info!("connecting to backend: {}", BACKEND_ADDR);
     let mut backend_stream = TcpStream::connect(BACKEND_ADDR)?;
 
     client_stream.set_nonblocking(true)?;
@@ -51,7 +54,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     while !done {
         let mut data_from_client = Vec::new();
         if !copy_stream(&mut client_stream, &mut backend_stream, &mut data_from_client)? {
-            println!("{} client EOF", client_stream.peer_addr()?);
+            info!("{} client EOF", client_stream.peer_addr()?);
             done = true;
         }
 
@@ -59,7 +62,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
 
         let mut data_from_backend = Vec::new();
         if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
-            println!("{} backend EOF", backend_stream.peer_addr()?);
+            info!("{} backend EOF", backend_stream.peer_addr()?);
             done = true;
         }
 
@@ -95,7 +98,7 @@ fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
         },
         Err(e) => {
-            println!("error: {}", e);
+            warn!("error: {}", e);
         },
     }
     Ok(true)
