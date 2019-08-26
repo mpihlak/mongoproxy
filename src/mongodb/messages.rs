@@ -112,3 +112,14 @@ fn read_c_string(rdr: impl Read) -> io::Result<String> {
 
     Err(Error::new(ErrorKind::Other, "conversion error"))
 }
+
+#[test]
+fn test_read_cstring() {
+    let buf = b"kala\0";
+    let res = read_c_string(&buf[..]).unwrap();
+    assert_eq!(res, "kala");
+
+    let buf = b"\0";
+    let res = read_c_string(&buf[..]).unwrap();
+    assert_eq!(res, "");
+}
