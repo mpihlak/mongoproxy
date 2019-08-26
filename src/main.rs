@@ -1,6 +1,7 @@
 use std::net::{TcpListener, TcpStream};
 use std::io::{self, Read, Write};
 use std::{thread, time, str};
+use log;
 
 mod mongodb;
 

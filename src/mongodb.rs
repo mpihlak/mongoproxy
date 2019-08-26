@@ -1,6 +1,6 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{self, Read, Error, ErrorKind};
-use bson::{decode_document, Document, DecoderError};
+use bson::{decode_document};
 use std::fmt;
 
 
@@ -47,7 +47,7 @@ impl fmt::Display for MsgOpMsg {
                self.flag_bits, self.kind).unwrap();
 
         for (i, v)  in self.sections.iter().enumerate() {
-            write!(f, "section {}: {}", i, v);
+            write!(f, "section {}: {}\n", i, v)?;
         }
         write!(f, ".")
     }
@@ -142,6 +142,9 @@ impl MongoProtocolParser {
     // This header in turn contains the length of the message that follows. So
     // we try to read message length worth of bytes and parse the message. Once
     // the message is parsed we expect a header again and the process repeats.
+    //
+    // TODO: Shut down the parser on parsing errors
+    // TODO: Return parsing result
     //
     pub fn parse_buffer(&mut self, buf: &Vec<u8>) {
         let mut work_buf = &buf[..];
