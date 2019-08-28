@@ -8,6 +8,24 @@ use log::{info};
 pub const HEADER_LENGTH: usize = 16;
 
 #[derive(Debug)]
+pub enum MongoMessage {
+    Query(MsgOpQuery),
+    Msg(MsgOpMsg),
+    None,
+}
+
+impl MongoMessage {
+    pub fn update_stats(&self, source_label: &str) {
+        // Extract the stats from the message and update any counters
+        match self {
+            MongoMessage::Query(q) => info!("{}: query: {}", source_label, q),
+            MongoMessage::Msg(m) => info!("{}: msg: {}", source_label, m),
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct MsgHeader {
     pub message_length: usize,
     pub request_id:     u32,
@@ -81,6 +99,13 @@ pub struct MsgOpQuery {
     full_collection_name: String,
     number_to_skip: i32,
     number_to_return: i32,
+}
+
+impl fmt::Display for MsgOpQuery {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}\n",
+               self.flags, self.full_collection_name, self.number_to_skip, self.number_to_return)
+    }
 }
 
 impl MsgOpQuery {

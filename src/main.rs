@@ -38,6 +38,7 @@ fn main() {
 // between the client and the backend. Also split the traffic to MongoDb protocol
 // parser, so that we can get some stats out of this.
 //
+// TODO: Consider using a pcap based solution instead of proxying the bytes.
 // TODO: Convert this to async IO or some form of epoll (mio?)
 fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     info!("new connection from {:?}", client_stream.peer_addr()?);
@@ -58,7 +59,8 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
             done = true;
         }
 
-        client_parser.parse_buffer(&data_from_client);
+        let msg = client_parser.parse_buffer(&data_from_client);
+        msg.update_stats("client");
 
         let mut data_from_backend = Vec::new();
         if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
@@ -66,7 +68,8 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
             done = true;
         }
 
-        backend_parser.parse_buffer(&data_from_backend);
+        let msg = backend_parser.parse_buffer(&data_from_backend);
+        msg.update_stats("backend");
 
         thread::sleep(time::Duration::from_millis(1));
     }

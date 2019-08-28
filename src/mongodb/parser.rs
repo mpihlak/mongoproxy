@@ -1,6 +1,6 @@
-use super::*;
+use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MongoMessage};
 
-use log::{debug,info,warn};
+use log::{debug,warn};
 
 
 pub struct MongoProtocolParser {
@@ -15,7 +15,7 @@ impl MongoProtocolParser {
 
     pub fn new() -> MongoProtocolParser {
         MongoProtocolParser{
-            header: messages::MsgHeader::new(),
+            header: MsgHeader::new(),
             have_header: false,
             want_bytes: messages::HEADER_LENGTH,
             message_buf: Vec::new(),
@@ -36,12 +36,14 @@ impl MongoProtocolParser {
     //
     // TODO: Actually return the parsed object.
     //
-    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> bool {
+    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> MongoMessage {
         if !self.parser_active {
-            return false;
+            return MongoMessage::None;
         }
 
         self.message_buf.extend(buf);
+
+        let mut result = MongoMessage::None;
 
         if self.message_buf.len() >= self.want_bytes {
             // Make a note of how many bytes we got as we're going to
@@ -49,7 +51,7 @@ impl MongoProtocolParser {
             let new_buffer_start = self.want_bytes;
 
             if !self.have_header {
-                match messages::MsgHeader::from_reader(&self.message_buf[..]) {
+                match MsgHeader::from_reader(&self.message_buf[..]) {
                     Ok(header) => {
                         assert!(header.message_length >= messages::HEADER_LENGTH);
                         self.header = header;
@@ -63,19 +65,17 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                debug!("processing payload {} bytes", self.header.message_length - messages::HEADER_LENGTH);
-
                 match self.header.op_code {
                     2004 => {
-                        let op = messages::MsgOpQuery::from_reader(&self.message_buf[..]);
-                        info!("OP_QUERY: {:?}", op);
+                        let op = MsgOpQuery::from_reader(&self.message_buf[..]).unwrap();
+                        result = MongoMessage::Query(op);
                     },
                     2013 => {
-                        let op = messages::MsgOpMsg::from_reader(&self.message_buf[..]);
-                        info!("OP_MSG: {}", op.unwrap());
+                        let op = MsgOpMsg::from_reader(&self.message_buf[..]).unwrap();
+                        result = MongoMessage::Msg(op);
                     },
                     op_code => {
-                        info!("OP {}", op_code);
+                        warn!("Unhandled OP: {}", op_code);
                     },
                 }
 
@@ -88,9 +88,9 @@ impl MongoProtocolParser {
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
             debug!("message_buf capacity={}", self.message_buf.capacity());
 
-            return true;
+            return result;
         }
 
-        false
+        messages::MongoMessage::None
     }
 }
