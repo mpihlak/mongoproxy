@@ -9,8 +9,8 @@ pub const HEADER_LENGTH: usize = 16;
 
 #[derive(Debug)]
 pub enum MongoMessage {
-    Query(MsgOpQuery),
     Msg(MsgOpMsg),
+    Query(MsgOpQuery),
     None,
 }
 
@@ -18,9 +18,9 @@ impl MongoMessage {
     pub fn update_stats(&self, source_label: &str) {
         // Extract the stats from the message and update any counters
         match self {
-            MongoMessage::Query(q) => info!("{}: query: {}", source_label, q),
             MongoMessage::Msg(m) => info!("{}: msg: {}", source_label, m),
-            _ => {}
+            MongoMessage::Query(m) => info!("{}: msg: {}", source_label, m),
+            MongoMessage::None => {},
         }
     }
 }

@@ -1,5 +1,5 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MongoMessage};
-
+use std::io::Read;
 use log::{debug,warn};
 
 
@@ -23,18 +23,16 @@ impl MongoProtocolParser {
         }
     }
 
-    // Parse the buffer and return the parsed object (if ready)
+    // Parse the buffer and return the parsed object when ready.
     //
-    // parse_buffer expects that it is being fed chunks of the incoming byte
-    // stream. It tries to assemble MongoDb messages and return the parsed
-    // messages.
+    // parse_buffer expects that it is being fed chunks of the incoming
+    // stream. It tries to assemble MongoDb messages and returns the parsed
+    // message.
     //
     // The first message we always want to see is the MongoDb message header.
     // This header in turn contains the length of the message that follows. So
     // we try to read message length worth of bytes and parse the message. Once
     // the message is parsed we expect a header again and the process repeats.
-    //
-    // TODO: Actually return the parsed object.
     //
     pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> MongoMessage {
         if !self.parser_active {
@@ -65,20 +63,9 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                match self.header.op_code {
-                    2004 => {
-                        let op = MsgOpQuery::from_reader(&self.message_buf[..]).unwrap();
-                        result = MongoMessage::Query(op);
-                    },
-                    2013 => {
-                        let op = MsgOpMsg::from_reader(&self.message_buf[..]).unwrap();
-                        result = MongoMessage::Msg(op);
-                    },
-                    op_code => {
-                        warn!("Unhandled OP: {}", op_code);
-                    },
-                }
+                result = get_message_from_reader(self.header.op_code, &self.message_buf[..]);
 
+                // We got the payload, time to ask for a header again
                 self.have_header = false;
                 self.want_bytes = messages::HEADER_LENGTH;
             }
@@ -93,4 +80,21 @@ impl MongoProtocolParser {
 
         messages::MongoMessage::None
     }
+}
+
+fn get_message_from_reader(op_code: u32, mut rdr: impl Read) -> MongoMessage {
+    match op_code {
+        2004 => {
+            let op = MsgOpQuery::from_reader(&mut rdr).unwrap();
+            return MongoMessage::Query(op);
+        },
+        2013 => {
+            let op = MsgOpMsg::from_reader(&mut rdr).unwrap();
+            return MongoMessage::Msg(op);
+        },
+        op_code => {
+            warn!("Unhandled OP: {}", op_code);
+        },
+    }
+    return MongoMessage::None;
 }
