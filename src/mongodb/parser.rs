@@ -34,6 +34,7 @@ impl MongoProtocolParser {
     // we try to read message length worth of bytes and parse the message. Once
     // the message is parsed we expect a header again and the process repeats.
     //
+    // TODO: Return also a header so that we could calculate first byte latencies.
     pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> MongoMessage {
         if !self.parser_active {
             return MongoMessage::None;
@@ -56,6 +57,7 @@ impl MongoProtocolParser {
                         self.have_header = true;
                         self.want_bytes = self.header.message_length - messages::HEADER_LENGTH;
                         debug!("parser: have header {:?}, want {} more bytes", self.header, self.want_bytes);
+                        result = MongoMessage::Header(self.header.clone());
                     },
                     Err(e) => {
                         warn!("parser: failed to read a header, stopping: {}", e);

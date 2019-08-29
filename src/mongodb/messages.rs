@@ -20,6 +20,7 @@ pub enum OpCode{
 
 #[derive(Debug)]
 pub enum MongoMessage {
+    Header(MsgHeader),
     Msg(MsgOpMsg),
     Query(MsgOpQuery),
     Reply(MsgOpReply),
@@ -30,6 +31,7 @@ impl MongoMessage {
     pub fn update_stats(&self, source_label: &str) {
         // Extract the stats from the message and update any counters
         match self {
+            MongoMessage::Header(m) => info!("{}: hdr: {}", source_label, m),
             MongoMessage::Msg(m) => info!("{}: msg: {}", source_label, m),
             MongoMessage::Query(m) => info!("{}: msg: {}", source_label, m),
             MongoMessage::Reply(m) => info!("{}: msg: {}", source_label, m),
@@ -38,7 +40,7 @@ impl MongoMessage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct MsgHeader {
     pub message_length: usize,
     pub request_id:     u32,
@@ -65,6 +67,13 @@ impl MsgHeader {
     }
 }
 
+impl fmt::Display for MsgHeader {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "HDR op: {}, request_id: {}, response_to: {}, length: {}",
+        self.op_code, self.request_id, self.response_to, self.message_length)
+    }
+}
+
 #[derive(Debug)]
 pub struct MsgOpMsg {
     flag_bits:  u32,
@@ -74,7 +83,7 @@ pub struct MsgOpMsg {
 
 impl fmt::Display for MsgOpMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_MSG flags: {}, kind: {}\n",
+        write!(f, "OP_MSG flags: {}, kind: {}",
                self.flag_bits, self.kind)?;
         for (i, v)  in self.sections.iter().enumerate() {
             write!(f, "section {}: {}\n", i, v)?;
@@ -116,7 +125,7 @@ pub struct MsgOpQuery {
 
 impl fmt::Display for MsgOpQuery {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}\n",
+        write!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}",
                self.flags, self.full_collection_name, self.number_to_skip, self.number_to_return)
     }
 }

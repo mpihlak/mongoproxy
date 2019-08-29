@@ -62,6 +62,12 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
         let msg = client_parser.parse_buffer(&data_from_client);
         msg.update_stats("client");
 
+        // In addition to the message payloads we should also be keeping track
+        // of MongoDb headers. That'd enable us to match responses to requests
+        // and calculate latency stats.
+        // Unclear if we need to keep multiple headers or is it enough just to
+        // keep the latest header that we received from the client.
+
         let mut data_from_backend = Vec::new();
         if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
             info!("{} backend EOF", backend_stream.peer_addr()?);
