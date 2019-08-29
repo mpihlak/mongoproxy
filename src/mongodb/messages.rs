@@ -3,14 +3,26 @@ use std::io::{self, Read, Error, ErrorKind};
 use bson::{decode_document};
 use std::fmt;
 use log::{info};
+use num_derive::FromPrimitive;
 
 
 pub const HEADER_LENGTH: usize = 16;
 
 #[derive(Debug)]
+#[derive(FromPrimitive)]
+pub enum OpCode{
+    OpReply = 1,
+    OpQuery = 2004,
+    OpMsg = 2013,
+    OpPing = 2010,
+    OpPong = 2011,
+}
+
+#[derive(Debug)]
 pub enum MongoMessage {
     Msg(MsgOpMsg),
     Query(MsgOpQuery),
+    Reply(MsgOpReply),
     None,
 }
 
@@ -20,6 +32,7 @@ impl MongoMessage {
         match self {
             MongoMessage::Msg(m) => info!("{}: msg: {}", source_label, m),
             MongoMessage::Query(m) => info!("{}: msg: {}", source_label, m),
+            MongoMessage::Reply(m) => info!("{}: msg: {}", source_label, m),
             MongoMessage::None => {},
         }
     }
@@ -115,6 +128,40 @@ impl MsgOpQuery {
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
         let number_to_return = rdr.read_i32::<LittleEndian>()?;
         Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return})
+    }
+}
+
+#[derive(Debug)]
+pub struct MsgOpReply {
+    flags:              u32,
+    cursor_id:          u64,
+    starting_from:      u32,
+    number_returned:    u32,
+    documents:          Vec<bson::Document>,
+}
+
+impl fmt::Display for MsgOpReply {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OP_REPLY flags: {}, cursor_id: {}, starting_from: {}, number_returned: {}\n",
+               self.flags, self.cursor_id, self.starting_from, self.number_returned)?;
+        for (i, v)  in self.documents.iter().enumerate() {
+            write!(f, "document {}: {}\n", i, v)?;
+        }
+        Ok(())
+    }
+}
+
+impl MsgOpReply {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+        let flags  = rdr.read_u32::<LittleEndian>()?;
+        let cursor_id = rdr.read_u64::<LittleEndian>()?;
+        let starting_from = rdr.read_u32::<LittleEndian>()?;
+        let number_returned = rdr.read_u32::<LittleEndian>()?;
+        let mut documents = Vec::new();
+        while let Ok(doc) = decode_document(&mut rdr) {
+            documents.push(doc);
+        }
+        Ok(MsgOpReply{flags, cursor_id, starting_from, number_returned, documents})
     }
 }
 

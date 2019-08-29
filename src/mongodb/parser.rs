@@ -1,4 +1,4 @@
-use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MongoMessage};
+use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MongoMessage,OpCode};
 use std::io::Read;
 use log::{debug,warn};
 
@@ -83,16 +83,22 @@ impl MongoProtocolParser {
 }
 
 fn get_message_from_reader(op_code: u32, mut rdr: impl Read) -> MongoMessage {
-    match op_code {
-        2004 => {
-            let op = MsgOpQuery::from_reader(&mut rdr).unwrap();
-            return MongoMessage::Query(op);
+    match num_traits::FromPrimitive::from_u32(op_code) {
+        Some(OpCode::OpReply) => {
+            let msg = MsgOpReply::from_reader(&mut rdr).unwrap();
+            return MongoMessage::Reply(msg);
+        }
+        Some(OpCode::OpQuery) => {
+            let msg = MsgOpQuery::from_reader(&mut rdr).unwrap();
+            return MongoMessage::Query(msg);
         },
-        2013 => {
-            let op = MsgOpMsg::from_reader(&mut rdr).unwrap();
-            return MongoMessage::Msg(op);
+        Some(OpCode::OpMsg) => {
+            let msg = MsgOpMsg::from_reader(&mut rdr).unwrap();
+            return MongoMessage::Msg(msg);
         },
-        op_code => {
+        Some(OpCode::OpPing) => {},
+        Some(OpCode::OpPong) => {},
+        None => {
             warn!("Unhandled OP: {}", op_code);
         },
     }
