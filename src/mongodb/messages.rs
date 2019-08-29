@@ -83,7 +83,7 @@ pub struct MsgOpMsg {
 
 impl fmt::Display for MsgOpMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_MSG flags: {}, kind: {}",
+        write!(f, "OP_MSG flags: {}, kind: {}\n",
                self.flag_bits, self.kind)?;
         for (i, v)  in self.sections.iter().enumerate() {
             write!(f, "section {}: {}\n", i, v)?;

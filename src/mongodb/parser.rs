@@ -34,15 +34,16 @@ impl MongoProtocolParser {
     // we try to read message length worth of bytes and parse the message. Once
     // the message is parsed we expect a header again and the process repeats.
     //
-    // TODO: Return also a header so that we could calculate first byte latencies.
+    // TODO: Stop the parser if any of the internal routines returns an error
+    //
     pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> MongoMessage {
+        let mut result = MongoMessage::None;
+
         if !self.parser_active {
             return MongoMessage::None;
         }
 
         self.message_buf.extend(buf);
-
-        let mut result = MongoMessage::None;
 
         if self.message_buf.len() >= self.want_bytes {
             // Make a note of how many bytes we got as we're going to
@@ -76,11 +77,9 @@ impl MongoProtocolParser {
             // And don't worry about performance, yet
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
             debug!("message_buf capacity={}", self.message_buf.capacity());
-
-            return result;
         }
 
-        messages::MongoMessage::None
+        result
     }
 }
 
