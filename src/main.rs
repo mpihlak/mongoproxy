@@ -25,6 +25,7 @@ fn main() {
             Ok(stream) => {
                 thread::spawn(|| {
                     let peer_addr = stream.peer_addr().unwrap().clone();
+                    info!("new connection from {}", peer_addr);
                     match handle_connection(TcpStream::from_stream(stream).unwrap()) {
                         Ok(_) => info!("{} closing connection.", peer_addr),
                         Err(e) => warn!("{} connection error: {}", peer_addr, e),
@@ -53,9 +54,7 @@ fn main() {
 // easily able to track connections that have already been established.
 //
 fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
-    info!("new connection from {:?}", client_stream.peer_addr()?);
     info!("connecting to backend: {}", BACKEND_ADDR);
-
     let mut backend_stream = TcpStream::connect(&BACKEND_ADDR.parse().unwrap())?;
 
     let mut done = false;
