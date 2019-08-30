@@ -6,9 +6,11 @@ use std::{thread, str};
 use log::{info,warn};
 use env_logger;
 
-use hyper::{rt::Future, service::service_fn_ok, Body, Response, Server};
+extern crate prometheus;
 
 mod mongodb;
+mod metrics;
+
 use mongodb::parser::MongoProtocolParser;
 
 const BACKEND_ADDR: &str = "127.0.0.1:27017";
@@ -21,24 +23,16 @@ fn main() {
     let listener = TcpListener::bind(LISTEN_ADDR).unwrap();
     info!("Listening on {}", LISTEN_ADDR);
 
-    let serve_metrics = || {
-        service_fn_ok(|_req|{
-            Response::new(Body::from("Metrics, metrics everywhere"))
-        })
-    };
-
-    let server = Server::bind(&METRICS_ADDR.parse().unwrap())
-        .serve(serve_metrics)
-        .map_err(|e| eprintln!("Metrics server error: {}", e));
-
-    thread::spawn(|| hyper::rt::run(server));
-
+    let app_metrics = metrics::Metrics::new();
+    app_metrics.start_listener(METRICS_ADDR);
     info!("Metrics endpoint at {}", METRICS_ADDR);
+
     info!("^C to exit");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                app_metrics.connection_count.inc();
                 thread::spawn(|| {
                     let peer_addr = stream.peer_addr().unwrap().clone();
                     info!("new connection from {}", peer_addr);
