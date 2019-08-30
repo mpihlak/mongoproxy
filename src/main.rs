@@ -5,19 +5,19 @@ use std::io::{self, Read, Write};
 use std::{thread, str};
 use log::{info,warn};
 use env_logger;
-use mongodb::parser::MongoProtocolParser;
 
 mod mongodb;
+use mongodb::parser::MongoProtocolParser;
 
 const BACKEND_ADDR: &str = "127.0.0.1:27017";
+const LISTEN_ADDR: &str = "127.0.0.1:27111";
 
 fn main() {
     env_logger::init();
 
-    let listen_addr = "127.0.0.1:27111";
-    let listener = TcpListener::bind(listen_addr).unwrap();
+    let listener = TcpListener::bind(LISTEN_ADDR).unwrap();
 
-    info!("Listening on {}", listen_addr);
+    info!("Listening on {}", LISTEN_ADDR);
     info!("^C to exit");
 
     for stream in listener.incoming() {
@@ -97,8 +97,7 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
                     let msg = backend_parser.parse_buffer(&data_from_backend);
                     msg.update_stats("backend");
                 },
-                _ => {
-                }
+                _ => {}
             }
         }
     }
