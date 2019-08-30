@@ -6,18 +6,34 @@ use std::{thread, str};
 use log::{info,warn};
 use env_logger;
 
+use hyper::{rt::Future, service::service_fn_ok, Body, Response, Server};
+
 mod mongodb;
 use mongodb::parser::MongoProtocolParser;
 
 const BACKEND_ADDR: &str = "127.0.0.1:27017";
 const LISTEN_ADDR: &str = "127.0.0.1:27111";
+const METRICS_ADDR: &str = "127.0.0.1:9898";
 
 fn main() {
     env_logger::init();
 
     let listener = TcpListener::bind(LISTEN_ADDR).unwrap();
-
     info!("Listening on {}", LISTEN_ADDR);
+
+    let serve_metrics = || {
+        service_fn_ok(|_req|{
+            Response::new(Body::from("Metrics, metrics everywhere"))
+        })
+    };
+
+    let server = Server::bind(&METRICS_ADDR.parse().unwrap())
+        .serve(serve_metrics)
+        .map_err(|e| eprintln!("Metrics server error: {}", e));
+
+    thread::spawn(|| hyper::rt::run(server));
+
+    info!("Metrics endpoint at {}", METRICS_ADDR);
     info!("^C to exit");
 
     for stream in listener.incoming() {
