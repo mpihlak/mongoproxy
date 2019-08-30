@@ -23,8 +23,8 @@ fn main() {
     let listener = TcpListener::bind(LISTEN_ADDR).unwrap();
     info!("Listening on {}", LISTEN_ADDR);
 
-    let app_metrics = metrics::Metrics::new();
-    app_metrics.start_listener(METRICS_ADDR);
+    let metrics = metrics::Metrics::new();
+    metrics::start_listener(METRICS_ADDR);
     info!("Metrics endpoint at {}", METRICS_ADDR);
 
     info!("^C to exit");
@@ -32,9 +32,10 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                app_metrics.connection_count.inc();
-                thread::spawn(|| {
-                    let peer_addr = stream.peer_addr().unwrap().clone();
+                let peer_addr = stream.peer_addr().unwrap().clone();
+                metrics.connection_count.with_label_values(&[&peer_addr.to_string()]).inc();
+
+                thread::spawn(move || {
                     info!("new connection from {}", peer_addr);
                     match handle_connection(TcpStream::from_stream(stream).unwrap()) {
                         Ok(_) => info!("{} closing connection.", peer_addr),
