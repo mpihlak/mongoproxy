@@ -25,7 +25,7 @@ fn main() {
 
     let metrics = metrics::Metrics::new();
     metrics::start_listener(METRICS_ADDR);
-    info!("Metrics endpoint at {}", METRICS_ADDR);
+    info!("Metrics endpoint at http://{}", METRICS_ADDR);
 
     info!("^C to exit");
 
@@ -34,10 +34,11 @@ fn main() {
             Ok(stream) => {
                 let peer_addr = stream.peer_addr().unwrap().clone();
                 metrics.connection_count.with_label_values(&[&peer_addr.to_string()]).inc();
+                let local_metrics = metrics.clone();
 
                 thread::spawn(move || {
                     info!("new connection from {}", peer_addr);
-                    match handle_connection(TcpStream::from_stream(stream).unwrap()) {
+                    match handle_connection(TcpStream::from_stream(stream).unwrap(), local_metrics) {
                         Ok(_) => info!("{} closing connection.", peer_addr),
                         Err(e) => warn!("{} connection error: {}", peer_addr, e),
                     };
@@ -64,9 +65,11 @@ fn main() {
 // The difficulty there would be reassembling the stream, and we wouldn't
 // easily able to track connections that have already been established.
 //
-fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
+fn handle_connection(mut client_stream: TcpStream, metrics: metrics::Metrics) -> std::io::Result<()> {
     info!("connecting to backend: {}", BACKEND_ADDR);
     let mut backend_stream = TcpStream::connect(&BACKEND_ADDR.parse().unwrap())?;
+
+    let client_addr = client_stream.peer_addr().unwrap().to_string();
 
     let mut done = false;
     let mut client_parser = MongoProtocolParser::new();
@@ -96,6 +99,8 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
 
                     let msg = client_parser.parse_buffer(&data_from_client);
                     msg.update_stats("client");
+                    metrics.client_bytes_recv.with_label_values(&[&client_addr])
+                        .inc_by(data_from_client.len() as f64);
                 },
                 BACKEND => {
                     let mut data_from_backend = Vec::new();
@@ -106,6 +111,9 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
 
                     let msg = backend_parser.parse_buffer(&data_from_backend);
                     msg.update_stats("backend");
+
+                    metrics.client_bytes_sent.with_label_values(&[&client_addr])
+                        .inc_by(data_from_backend.len() as f64);
                 },
                 _ => {}
             }

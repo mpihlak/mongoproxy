@@ -2,20 +2,40 @@ use std::{thread};
 use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
 use prometheus::{CounterVec, Opts, Encoder, TextEncoder};
 
+#[derive(Clone)]
 pub struct Metrics {
     pub connection_count: CounterVec,
+    pub client_bytes_recv: CounterVec,
+    pub client_bytes_sent: CounterVec,
 }
 
 impl Metrics {
     pub fn new() -> Metrics {
         let connection_count = CounterVec::new(
             Opts::new(
-                "connections_established_total",
+                "client_connections_established_total",
                 "Total number of client connections established"),
                 &["client"]).unwrap();
         prometheus::register(Box::new(connection_count.clone())).unwrap();
+
+        let client_bytes_recv = CounterVec::new(
+            Opts::new(
+                "client_bytes_received",
+                "Total number of bytes received from the client"),
+                &["client"]).unwrap();
+        prometheus::register(Box::new(client_bytes_recv.clone())).unwrap();
+
+        let client_bytes_sent = CounterVec::new(
+            Opts::new(
+                "client_bytes_sent",
+                "Total number of bytes received from the client"),
+                &["client"]).unwrap();
+        prometheus::register(Box::new(client_bytes_sent.clone())).unwrap();
+
         Metrics {
             connection_count,
+            client_bytes_recv,
+            client_bytes_sent,
         }
     }
 }
