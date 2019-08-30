@@ -6,7 +6,10 @@ use std::{thread, str};
 use log::{info,warn};
 use env_logger;
 
+#[macro_use]
 extern crate prometheus;
+#[macro_use]
+extern crate lazy_static;
 
 mod mongodb;
 mod metrics;
@@ -38,9 +41,12 @@ fn main() {
 
                 thread::spawn(move || {
                     info!("new connection from {}", peer_addr);
-                    match handle_connection(TcpStream::from_stream(stream).unwrap(), local_metrics) {
+                    match handle_connection(TcpStream::from_stream(stream).unwrap(), &local_metrics) {
                         Ok(_) => info!("{} closing connection.", peer_addr),
-                        Err(e) => warn!("{} connection error: {}", peer_addr, e),
+                        Err(e) => {
+                            warn!("{} connection error: {}", peer_addr, e);
+                            local_metrics.connection_errors.inc();
+                        },
                     };
                 });
             },
@@ -65,7 +71,7 @@ fn main() {
 // The difficulty there would be reassembling the stream, and we wouldn't
 // easily able to track connections that have already been established.
 //
-fn handle_connection(mut client_stream: TcpStream, metrics: metrics::Metrics) -> std::io::Result<()> {
+fn handle_connection(mut client_stream: TcpStream, metrics: &metrics::Metrics) -> std::io::Result<()> {
     info!("connecting to backend: {}", BACKEND_ADDR);
     let mut backend_stream = TcpStream::connect(&BACKEND_ADDR.parse().unwrap())?;
 
@@ -98,7 +104,7 @@ fn handle_connection(mut client_stream: TcpStream, metrics: metrics::Metrics) ->
                     }
 
                     let msg = client_parser.parse_buffer(&data_from_client);
-                    msg.update_stats("client");
+                    msg.update_metrics("client", &metrics);
                     metrics.client_bytes_recv.with_label_values(&[&client_addr])
                         .inc_by(data_from_client.len() as f64);
                 },
@@ -110,7 +116,7 @@ fn handle_connection(mut client_stream: TcpStream, metrics: metrics::Metrics) ->
                     }
 
                     let msg = backend_parser.parse_buffer(&data_from_backend);
-                    msg.update_stats("backend");
+                    msg.update_metrics("backend", &metrics);
 
                     metrics.client_bytes_sent.with_label_values(&[&client_addr])
                         .inc_by(data_from_backend.len() as f64);

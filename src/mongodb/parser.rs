@@ -1,7 +1,27 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MongoMessage,OpCode};
 use std::io::Read;
 use log::{debug,warn};
+use prometheus::{CounterVec};
 
+
+lazy_static! {
+    static ref OPCODE_COUNTER: CounterVec =
+        register_counter_vec!(
+            "opcode_count_total",
+            "Number of different opcodes encountered",
+            &["opcode"]).unwrap();
+
+    static ref UNSUPPORTED_OPCODE_COUNTER: CounterVec =
+        register_counter_vec!(
+            "unsupported_opcode_count_total",
+            "Number of unrecognized opcodes in MongoDb header",
+            &["opcode"]).unwrap();
+    static ref HEADER_PARSE_ERRORS_COUNTER: CounterVec =
+        register_counter_vec!(
+            "header_parse_error_count_total",
+            "Header parse errors",
+            &["error"]).unwrap();
+}
 
 pub struct MongoProtocolParser {
     header: messages::MsgHeader,
@@ -63,6 +83,7 @@ impl MongoProtocolParser {
                     Err(e) => {
                         warn!("parser: failed to read a header, stopping: {}", e);
                         self.parser_active = false;
+                        HEADER_PARSE_ERRORS_COUNTER.with_label_values(&[&e.to_string()]).inc();
                     },
                 }
             } else {
@@ -84,6 +105,8 @@ impl MongoProtocolParser {
 }
 
 fn get_message_from_reader(op_code: u32, mut rdr: impl Read) -> MongoMessage {
+    OPCODE_COUNTER.with_label_values(&[&op_code.to_string()]).inc();
+
     match num_traits::FromPrimitive::from_u32(op_code) {
         Some(OpCode::OpReply) => {
             let msg = MsgOpReply::from_reader(&mut rdr).unwrap();
@@ -100,6 +123,7 @@ fn get_message_from_reader(op_code: u32, mut rdr: impl Read) -> MongoMessage {
         Some(OpCode::OpPing) => {},
         Some(OpCode::OpPong) => {},
         None => {
+            UNSUPPORTED_OPCODE_COUNTER.with_label_values(&[&op_code.to_string()]).inc();
             warn!("Unhandled OP: {}", op_code);
         },
     }
