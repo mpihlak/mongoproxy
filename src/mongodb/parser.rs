@@ -16,6 +16,7 @@ lazy_static! {
             "unsupported_opcode_count_total",
             "Number of unrecognized opcodes in MongoDb header",
             &["opcode"]).unwrap();
+
     static ref HEADER_PARSE_ERRORS_COUNTER: CounterVec =
         register_counter_vec!(
             "header_parse_error_count_total",
