@@ -49,12 +49,11 @@ pub fn start_listener(endpoint: &str) {
             let mut buffer = vec![];
             encoder.encode(&metric_families, &mut buffer).unwrap();
 
-            let response = Response::builder()
+            Response::builder()
                 .status(200)
                 .header(CONTENT_TYPE, encoder.format_type())
                 .body(Body::from(buffer))
-                .unwrap();
-            response
+                .unwrap()
         })
     };
 
