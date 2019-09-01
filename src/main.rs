@@ -3,7 +3,7 @@ use mio::net::{TcpStream};
 use std::net::{TcpListener};
 use std::io::{self, Read, Write};
 use std::{thread, str};
-use log::{info,warn};
+use log::{info,warn,debug};
 use env_logger;
 
 #[macro_use]
@@ -92,16 +92,21 @@ fn handle_connection(mut client_stream: TcpStream, metrics: &metrics::Metrics) -
     let mut events = Events::with_capacity(1024);
 
     while !done {
+        debug!("Polling");
         poll.poll(&mut events, None).unwrap();
+        debug!("poll done");
 
         for event in events.iter() {
             match event.token() {
                 CLIENT => {
                     let mut data_from_client = Vec::new();
+
+                    debug!("Reading from client");
                     if !copy_stream(&mut client_stream, &mut backend_stream, &mut data_from_client)? {
                         info!("{} client EOF", client_stream.peer_addr()?);
                         done = true;
                     }
+                    debug!("Client read done.");
 
                     let msg = client_parser.parse_buffer(&data_from_client);
                     msg.update_metrics("client", &metrics);
@@ -110,10 +115,13 @@ fn handle_connection(mut client_stream: TcpStream, metrics: &metrics::Metrics) -
                 },
                 BACKEND => {
                     let mut data_from_backend = Vec::new();
+
+                    debug!("Reading from backend");
                     if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
                         info!("{} backend EOF", backend_stream.peer_addr()?);
                         done = true;
                     }
+                    debug!("Backend read done");
 
                     let msg = backend_parser.parse_buffer(&data_from_backend);
                     msg.update_metrics("backend", &metrics);
