@@ -5,7 +5,6 @@ use std::fmt;
 use log::{info};
 use num_derive::FromPrimitive;
 
-use crate::metrics::{Metrics};
 
 pub const HEADER_LENGTH: usize = 16;
 
@@ -30,11 +29,8 @@ pub enum MongoMessage {
 
 impl MongoMessage {
 
-    // Extract the stats from the message and update counters
-    //
-    // We need to keep some state here, so that we can match backend
-    // responses to client requests.
-    pub fn update_metrics(&self, source_label: &str, metrics: &Metrics) {
+    // Log the parsed message
+    pub fn log(&self, source_label: &str) {
 
         match self {
             MongoMessage::Header(m) => {

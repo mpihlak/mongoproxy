@@ -14,7 +14,7 @@ extern crate lazy_static;
 mod mongodb;
 mod metrics;
 
-use mongodb::parser::MongoProtocolParser;
+use mongodb::parser::{MongoStatsTracker};
 
 const BACKEND_ADDR: &str = "127.0.0.1:27017";
 const LISTEN_ADDR: &str = "127.0.0.1:27111";
@@ -73,19 +73,19 @@ fn main() {
 //
 fn handle_connection(mut client_stream: TcpStream, metrics: &metrics::Metrics) -> std::io::Result<()> {
     info!("connecting to backend: {}", BACKEND_ADDR);
-    let mut backend_stream = TcpStream::connect(&BACKEND_ADDR.parse().unwrap())?;
+    let mut server_stream = TcpStream::connect(&BACKEND_ADDR.parse().unwrap())?;
 
     let client_addr = client_stream.peer_addr().unwrap().to_string();
 
     let mut done = false;
-    let mut client_parser = MongoProtocolParser::new();
-    let mut backend_parser = MongoProtocolParser::new();
+
+    let mut tracker = MongoStatsTracker::new(&client_addr);
 
     const CLIENT: Token = Token(1);
     const BACKEND: Token = Token(2);
 
     let poll = Poll::new().unwrap();
-    poll.register(&backend_stream, BACKEND, Ready::readable() | Ready::writable(),
+    poll.register(&server_stream, BACKEND, Ready::readable() | Ready::writable(),
                   PollOpt::edge()).unwrap();
     poll.register(&client_stream, CLIENT, Ready::readable() | Ready::writable(),
                   PollOpt::edge()).unwrap();
@@ -102,32 +102,25 @@ fn handle_connection(mut client_stream: TcpStream, metrics: &metrics::Metrics) -
                     let mut data_from_client = Vec::new();
 
                     debug!("Reading from client");
-                    if !copy_stream(&mut client_stream, &mut backend_stream, &mut data_from_client)? {
+                    if !copy_stream(&mut client_stream, &mut server_stream, &mut data_from_client)? {
                         info!("{} client EOF", client_stream.peer_addr()?);
                         done = true;
                     }
                     debug!("Client read done.");
 
-                    let msg = client_parser.parse_buffer(&data_from_client);
-                    msg.update_metrics("client", &metrics);
-                    metrics.client_bytes_recv.with_label_values(&[&client_addr])
-                        .inc_by(data_from_client.len() as f64);
+                    tracker.track_client_request(metrics, &data_from_client);
                 },
                 BACKEND => {
                     let mut data_from_backend = Vec::new();
 
                     debug!("Reading from backend");
-                    if !copy_stream(&mut backend_stream, &mut client_stream, &mut data_from_backend)? {
-                        info!("{} backend EOF", backend_stream.peer_addr()?);
+                    if !copy_stream(&mut server_stream, &mut client_stream, &mut data_from_backend)? {
+                        info!("{} backend EOF", server_stream.peer_addr()?);
                         done = true;
                     }
                     debug!("Backend read done");
 
-                    let msg = backend_parser.parse_buffer(&data_from_backend);
-                    msg.update_metrics("backend", &metrics);
-
-                    metrics.client_bytes_sent.with_label_values(&[&client_addr])
-                        .inc_by(data_from_backend.len() as f64);
+                    tracker.track_server_response(metrics, &data_from_backend);
                 },
                 _ => {}
             }
