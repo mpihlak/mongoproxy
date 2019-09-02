@@ -1,6 +1,5 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MongoMessage,OpCode};
 use std::io::Read;
-use std::collections::HashMap;
 use std::time::{Instant};
 use log::{debug,info,warn};
 use prometheus::{CounterVec, HistogramVec};
@@ -26,16 +25,10 @@ lazy_static! {
             "Header parse errors",
             &["error"]).unwrap();
 
-    static ref TIME_TO_FIRST_BYTE_HISTOGRAM: HistogramVec =
+    static ref SERVER_RESPONSE_TIME_SECONDS: HistogramVec =
         register_histogram_vec!(
-            "time_to_first_byte_seconds",
-            "Time to first byte from the backend",
-            &["op", "collection"]).unwrap();
-
-    static ref TIME_TO_LAST_BYTE_HISTOGRAM: HistogramVec =
-        register_histogram_vec!(
-            "time_to_last_byte_seconds",
-            "Time to last byte from the backend",
+            "server_response_time_seconds",
+            "Backend response latency",
             &["op", "collection"]).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
@@ -53,18 +46,18 @@ lazy_static! {
 
 pub struct MongoStatsTracker {
     client:             MongoProtocolParser,
-    client_requests:    HashMap<u32,MongoMessage>,
     server:             MongoProtocolParser,
     client_addr:        String,
+    last_client_message: Option<MongoMessage>,
 }
 
 impl MongoStatsTracker {
     pub fn new(client_addr: &String) -> Self {
         MongoStatsTracker {
             client: MongoProtocolParser::new(),
-            client_requests: HashMap::new(),
             server: MongoProtocolParser::new(),
             client_addr: client_addr.clone(),
+            last_client_message: None,
         }
     }
 
@@ -74,6 +67,7 @@ impl MongoStatsTracker {
             info!("client: msg: {}", msg);
             CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
                 .inc_by(buf.len() as f64);
+            self.last_client_message = Some(msg);
         }
     }
 
@@ -81,33 +75,19 @@ impl MongoStatsTracker {
         if let Some(msg) = self.server.parse_buffer(buf) {
             info!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
+            if let Some(client_msg) = &self.last_client_message {
+                info!("server: in response to: {}", client_msg);
+            }
             SERVER_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
                 .inc_by(buf.len() as f64);
 
-            if !self.server.have_message {
-                return;
+            if self.server.header_time > self.client.header_time {
+                let time_to_first_byte = self.server.header_time.
+                    duration_since(self.client.header_time).as_millis() as f64;
+                SERVER_RESPONSE_TIME_SECONDS
+                    .with_label_values(&[&"foo", &"bar"])
+                    .observe(time_to_first_byte * 1000.0);
             }
-
-            if self.server.header.response_to != self.client.header.request_id {
-                warn!("response id {} does not match client request {}",
-                    self.server.header.response_to, self.client.header.request_id);
-                return;
-            }
-
-            info!("Updating counters");
-            /*
-            let time_to_first_byte = self.server.header_time.
-                duration_since(self.client.header_time).as_millis() as f64;
-            TIME_TO_FIRST_BYTE_HISTOGRAM
-                .with_label_values(&[&"foo", &"bar"])
-                .observe(time_to_first_byte * 1000.0);
-
-            let time_to_last_byte = self.server.message_time.
-                duration_since(self.client.header_time).as_millis() as f64;
-            TIME_TO_LAST_BYTE_HISTOGRAM
-                .with_label_values(&[&"foo", &"bar"])
-                .observe(time_to_last_byte * 1000.0);
-            */
         }
     }
 }
