@@ -20,29 +20,19 @@ pub enum OpCode{
 
 #[derive(Debug)]
 pub enum MongoMessage {
-    Header(MsgHeader),
     Msg(MsgOpMsg),
     Query(MsgOpQuery),
     Reply(MsgOpReply),
     None,
 }
 
-impl MongoMessage {
-
-    // Log the parsed message
-    pub fn log(&self, source_label: &str) {
-
-        match self {
-            MongoMessage::Header(m) => {
-                info!("{}: hdr: {}", source_label, m);
-            },
-            MongoMessage::Msg(m) => {
-                // With headers we
-                info!("{}: msg: {}", source_label, m)
-            },
-            MongoMessage::Query(m) => info!("{}: msg: {}", source_label, m),
-            MongoMessage::Reply(m) => info!("{}: msg: {}", source_label, m),
-            MongoMessage::None => {},
+impl fmt::Display for MongoMessage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        return match self {
+            MongoMessage::Msg(m) => m.fmt(f),
+            MongoMessage::Query(m) => m.fmt(f),
+            MongoMessage::Reply(m) => m.fmt(f),
+            MongoMessage::None => "(None)".fmt(f),
         }
     }
 }

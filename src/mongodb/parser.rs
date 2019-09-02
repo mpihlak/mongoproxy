@@ -1,9 +1,10 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MongoMessage,OpCode};
 use std::io::Read;
+use std::collections::HashMap;
 use std::time::{Instant};
 use log::{debug,info,warn};
 use prometheus::{CounterVec, HistogramVec};
-use crate::metrics::{Metrics};
+use byteorder::{ByteOrder, LittleEndian};
 
 
 lazy_static! {
@@ -36,39 +37,78 @@ lazy_static! {
             "time_to_last_byte_seconds",
             "Time to last byte from the backend",
             &["op", "collection"]).unwrap();
+
+    static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
+        register_counter_vec!(
+            "client_bytes_sent_total",
+            "Total number of bytes sent by the client",
+            &["client"]).unwrap();
+
+    static ref SERVER_BYTES_SENT_TOTAL: CounterVec =
+        register_counter_vec!(
+            "sever_bytes_sent_total",
+            "Total number of bytes sent by the server",
+            &["client"]).unwrap();
 }
 
 pub struct MongoStatsTracker {
-    client_parser: MongoProtocolParser,
-    server_parser: MongoProtocolParser,
-    client_addr: String,
+    client:             MongoProtocolParser,
+    client_requests:    HashMap<u32,MongoMessage>,
+    server:             MongoProtocolParser,
+    client_addr:        String,
 }
 
 impl MongoStatsTracker {
     pub fn new(client_addr: &String) -> Self {
         MongoStatsTracker {
-            client_parser: MongoProtocolParser::new(),
-            server_parser: MongoProtocolParser::new(),
+            client: MongoProtocolParser::new(),
+            client_requests: HashMap::new(),
+            server: MongoProtocolParser::new(),
             client_addr: client_addr.clone(),
         }
     }
 
-    pub fn track_client_request(&mut self, metrics: &Metrics, buf: &Vec<u8>) {
-        let msg = self.client_parser.parse_buffer(buf);
-        msg.log("client");
-        metrics.client_bytes_recv.with_label_values(&[&self.client_addr])
-            .inc_by(buf.len() as f64);
-
+    pub fn track_client_request(&mut self, buf: &Vec<u8>) {
+        if let Some(msg) = self.client.parse_buffer(buf) {
+            info!("client: hdr: {}", self.client.header);
+            info!("client: msg: {}", msg);
+            CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
+                .inc_by(buf.len() as f64);
+        }
     }
 
-    pub fn track_server_response(&mut self, metrics: &Metrics, buf: &Vec<u8>) {
-        let msg = self.server_parser.parse_buffer(buf);
-        msg.log("backend");
-        self.server_parser.track_stats(&self.client_parser);
+    pub fn track_server_response(&mut self, buf: &Vec<u8>) {
+        if let Some(msg) = self.server.parse_buffer(buf) {
+            info!("server: hdr: {}", self.server.header);
+            info!("server: msg: {}", msg);
+            SERVER_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
+                .inc_by(buf.len() as f64);
 
-        metrics.client_bytes_sent.with_label_values(&[&self.client_addr])
-            .inc_by(buf.len() as f64);
+            if !self.server.have_message {
+                return;
+            }
 
+            if self.server.header.response_to != self.client.header.request_id {
+                warn!("response id {} does not match client request {}",
+                    self.server.header.response_to, self.client.header.request_id);
+                return;
+            }
+
+            info!("Updating counters");
+            /*
+            let time_to_first_byte = self.server.header_time.
+                duration_since(self.client.header_time).as_millis() as f64;
+            TIME_TO_FIRST_BYTE_HISTOGRAM
+                .with_label_values(&[&"foo", &"bar"])
+                .observe(time_to_first_byte * 1000.0);
+
+            let time_to_last_byte = self.server.message_time.
+                duration_since(self.client.header_time).as_millis() as f64;
+            TIME_TO_LAST_BYTE_HISTOGRAM
+                .with_label_values(&[&"foo", &"bar"])
+                .observe(time_to_last_byte * 1000.0);
+            */
+        }
     }
 }
 
@@ -111,11 +151,11 @@ impl MongoProtocolParser {
     //
     // TODO: Stop the parser if any of the internal routines returns an error
     //
-    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> MongoMessage {
-        let mut result = MongoMessage::None;
+    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> Option<MongoMessage> {
+        let mut result = None;
 
         if !self.parser_active {
-            return MongoMessage::None;
+            return None;
         }
 
         self.message_buf.extend(buf);
@@ -135,7 +175,6 @@ impl MongoProtocolParser {
                         self.header_time = Instant::now();
                         self.want_bytes = self.header.message_length - messages::HEADER_LENGTH;
                         debug!("parser: have header {:?}, want {} more bytes", self.header, self.want_bytes);
-                        result = MongoMessage::Header(self.header.clone());
                     },
                     Err(e) => {
                         warn!("parser: failed to read a header, stopping: {}", e);
@@ -144,7 +183,7 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                result = extract_message(self.header.op_code, &self.message_buf[..]);
+                result = Some(extract_message(self.header.op_code, &self.message_buf[..]));
 
                 // We got the payload, time to ask for a header again
                 self.message_time = Instant::now();
@@ -160,34 +199,6 @@ impl MongoProtocolParser {
         }
 
         result
-    }
-
-    pub fn track_stats(&self, client: &MongoProtocolParser) {
-        let request_header = &client.header;
-
-        if !self.have_message {
-            return;
-        }
-
-        if self.header.response_to != request_header.request_id {
-            warn!("response id {} does not match last request {}",
-                self.header.response_to, request_header.request_id);
-            return;
-        }
-
-        info!("Updating counters");
-
-        let time_to_first_byte = self.header_time.
-            duration_since(client.header_time).as_millis() as f64;
-        TIME_TO_FIRST_BYTE_HISTOGRAM
-            .with_label_values(&[&"foo", &"bar"])
-            .observe(time_to_first_byte * 1000.0);
-
-        let time_to_last_byte = self.message_time.
-            duration_since(client.header_time).as_millis() as f64;
-        TIME_TO_LAST_BYTE_HISTOGRAM
-            .with_label_values(&[&"foo", &"bar"])
-            .observe(time_to_last_byte * 1000.0);
     }
 }
 
@@ -215,4 +226,24 @@ fn extract_message(op_code: u32, mut rdr: impl Read) -> MongoMessage {
         },
     }
     return MongoMessage::None;
+}
+
+#[test]
+fn test_parse_buffer_header() {
+    let mut buf = [0; messages::HEADER_LENGTH];
+    LittleEndian::write_u32(&mut buf[0..4], messages::HEADER_LENGTH as u32);
+    LittleEndian::write_u32(&mut buf[4..8], 1234);
+    LittleEndian::write_u32(&mut buf[8..12], 5678);
+    LittleEndian::write_u32(&mut buf[12..16], 1);
+
+    let mut parser = MongoProtocolParser::new();
+
+    let result = match parser.parse_buffer(&buf.to_vec()) {
+        None => true,
+        _ => false,
+    };
+    assert_eq!(result, true);
+    assert_eq!(parser.have_header, true);
+    assert_eq!(parser.have_message, false);
+    assert_eq!(parser.want_bytes, 0);
 }
