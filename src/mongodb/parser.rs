@@ -3,7 +3,6 @@ use std::io::Read;
 use std::time::{Instant};
 use log::{debug,info,warn};
 use prometheus::{CounterVec, HistogramVec};
-use byteorder::{ByteOrder, LittleEndian};
 
 
 lazy_static! {
@@ -212,18 +211,22 @@ fn extract_message(op_code: u32, mut rdr: impl Read) -> MongoMessage {
 
 #[test]
 fn test_parse_buffer_header() {
-    let mut buf = [0; messages::HEADER_LENGTH];
-    LittleEndian::write_u32(&mut buf[0..4], messages::HEADER_LENGTH as u32);
-    LittleEndian::write_u32(&mut buf[4..8], 1234);
-    LittleEndian::write_u32(&mut buf[8..12], 5678);
-    LittleEndian::write_u32(&mut buf[12..16], 1);
+    let hdr = MsgHeader {
+        message_length: messages::HEADER_LENGTH,
+        request_id: 1234,
+        response_to: 5678,
+        op_code: 1,
+    };
+
+    let mut buf = [0 as u8; messages::HEADER_LENGTH];
+    hdr.write(&mut buf[..]).unwrap();
 
     let mut parser = MongoProtocolParser::new();
-
     let result = match parser.parse_buffer(&buf.to_vec()) {
         None => true,
         _ => false,
     };
+
     assert_eq!(result, true);
     assert_eq!(parser.have_header, true);
     assert_eq!(parser.have_message, false);

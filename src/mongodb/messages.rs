@@ -1,5 +1,5 @@
-use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::{self, Read, Error, ErrorKind};
+use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
+use std::io::{self, Read, Write, Error, ErrorKind};
 use bson::{decode_document};
 use std::fmt;
 use log::{info};
@@ -61,6 +61,14 @@ impl MsgHeader {
         let response_to     = rdr.read_u32::<LittleEndian>()?;
         let op_code         = rdr.read_u32::<LittleEndian>()?;
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
+    }
+
+    pub fn write(&self, mut writer: impl Write) -> io::Result<()> {
+        writer.write_u32::<LittleEndian>(self.message_length as u32)?;
+        writer.write_u32::<LittleEndian>(self.request_id)?;
+        writer.write_u32::<LittleEndian>(self.response_to)?;
+        writer.write_u32::<LittleEndian>(self.op_code)?;
+        Ok(())
     }
 }
 
