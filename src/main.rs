@@ -154,7 +154,6 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
                         done = true;
                     }
                     debug!("Read {} bytes from server", data_from_server.len());
-
                     tracker.track_server_response(&data_from_server);
                 },
                 _ => {}

@@ -101,6 +101,10 @@ impl MsgOpMsg {
         }
 
         let mut sections = Vec::new();
+
+        // Note: that this is another one of those places where
+        // we are allocating based on what we receive on the wire.
+        // If the data is corrupted we might easily blow up here.
         while let Ok(doc) = decode_document(&mut rdr) {
             sections.push(doc);
         }

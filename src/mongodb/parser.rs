@@ -62,25 +62,27 @@ impl MongoStatsTracker {
     }
 
     pub fn track_client_request(&mut self, buf: &Vec<u8>) {
+        CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
+            .inc_by(buf.len() as f64);
+
         if let Some(msg) = self.client.parse_buffer(buf) {
             info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", msg);
-            CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
-                .inc_by(buf.len() as f64);
             self.last_client_message = Some(msg);
         }
     }
 
     pub fn track_server_response(&mut self, buf: &Vec<u8>) {
+        SERVER_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
+            .inc_by(buf.len() as f64);
+
+
         if let Some(msg) = self.server.parse_buffer(buf) {
             info!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
             if let Some(client_msg) = &self.last_client_message {
                 info!("server: in response to: {}", client_msg);
             }
-            SERVER_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
-                .inc_by(buf.len() as f64);
-
             if self.server.header_time > self.client.header_time {
                 let time_to_first_byte = self.server.header_time.
                     duration_since(self.client.header_time).as_millis() as f64;
@@ -146,7 +148,7 @@ impl MongoProtocolParser {
             let new_buffer_start = self.want_bytes;
 
             if !self.have_header {
-                match MsgHeader::from_reader(&self.message_buf[..]) {
+                match MsgHeader::from_reader(&self.message_buf[..self.want_bytes]) {
                     Ok(header) => {
                         assert!(header.message_length >= messages::HEADER_LENGTH);
                         self.header = header;
@@ -163,7 +165,7 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                result = Some(extract_message(self.header.op_code, &self.message_buf[..]));
+                result = Some(extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]));
 
                 // We got the payload, time to ask for a header again
                 self.message_time = Instant::now();
