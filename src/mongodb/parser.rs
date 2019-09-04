@@ -64,7 +64,7 @@ impl MongoStatsTracker {
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for msg in self.client.parse_buffer(buf).iter() {
+        for msg in self.client.parse_buffer(buf) {
             info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", msg);
             self.client_request_time = Instant::now();
@@ -80,10 +80,6 @@ impl MongoStatsTracker {
             info!("server: msg: {}", msg);
 
             let time_to_response = self.client_request_time.elapsed().as_millis();
-            if time_to_response > 1000 {
-                warn!("request_time: {:?}, d: {}",
-                    self.client_request_time, time_to_response);
-            }
             SERVER_RESPONSE_TIME_SECONDS
                 .with_label_values(&[&"foo", &"bar"])
                 .observe(time_to_response as f64 / 1000.0);
