@@ -48,7 +48,6 @@ pub struct MongoStatsTracker {
     server:                 MongoProtocolParser,
     client_addr:            String,
     client_request_time:    Instant,
-    last_client_message:    Option<MongoMessage>,
 }
 
 impl MongoStatsTracker {
@@ -58,7 +57,6 @@ impl MongoStatsTracker {
             server: MongoProtocolParser::new(),
             client_addr: client_addr.clone(),
             client_request_time: Instant::now(),
-            last_client_message: None,
         }
     }
 
@@ -66,10 +64,9 @@ impl MongoStatsTracker {
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        if let Some(msg) = self.client.parse_buffer(buf) {
+        for msg in self.client.parse_buffer(buf).iter() {
             info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", msg);
-            self.last_client_message = Some(msg);
             self.client_request_time = Instant::now();
         }
     }
@@ -78,16 +75,15 @@ impl MongoStatsTracker {
         SERVER_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        if let Some(msg) = self.server.parse_buffer(buf) {
+        for msg in self.server.parse_buffer(buf) {
             info!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
-            if let Some(client_msg) = &self.last_client_message {
-                info!("server: in response to: {}", client_msg);
-            }
 
             let time_to_response = self.client_request_time.elapsed().as_millis();
-            info!("request_time: {:?}, d: {}",
-                self.client_request_time, time_to_response);
+            if time_to_response > 1000 {
+                warn!("request_time: {:?}, d: {}",
+                    self.client_request_time, time_to_response);
+            }
             SERVER_RESPONSE_TIME_SECONDS
                 .with_label_values(&[&"foo", &"bar"])
                 .observe(time_to_response as f64 / 1000.0);
@@ -130,16 +126,16 @@ impl MongoProtocolParser {
     //
     // TODO: Stop the parser if any of the internal routines returns an error
     //
-    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> Option<MongoMessage> {
-        let mut result = None;
+    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> Vec<MongoMessage> {
+        let mut result = Vec::new();
 
         if !self.parser_active {
-            return None;
+            return result;
         }
 
         self.message_buf.extend(buf);
 
-        if self.message_buf.len() >= self.want_bytes {
+        while self.message_buf.len() >= self.want_bytes {
             // Make a note of how many bytes we got as we're going to
             // overwrite it later.
             let new_buffer_start = self.want_bytes;
@@ -161,7 +157,7 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                result = Some(extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]));
+                result.push(extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]));
 
                 // We got the payload, time to ask for a header again
                 self.have_header = false;
@@ -223,12 +219,9 @@ fn test_parse_buffer_header() {
     hdr.write(&mut buf[..]).unwrap();
 
     let mut parser = MongoProtocolParser::new();
-    let result = match parser.parse_buffer(&buf.to_vec()) {
-        None => true,
-        _ => false,
-    };
+    let result = parser.parse_buffer(&buf.to_vec());
 
-    assert_eq!(result, true);
+    assert_eq!(result.len(), 0);                // just the header
     assert_eq!(parser.have_header, true);
     assert_eq!(parser.have_message, false);
     assert_eq!(parser.want_bytes, 0);
