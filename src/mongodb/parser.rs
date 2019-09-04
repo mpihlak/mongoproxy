@@ -44,10 +44,11 @@ lazy_static! {
 }
 
 pub struct MongoStatsTracker {
-    client:             MongoProtocolParser,
-    server:             MongoProtocolParser,
-    client_addr:        String,
-    last_client_message: Option<MongoMessage>,
+    client:                 MongoProtocolParser,
+    server:                 MongoProtocolParser,
+    client_addr:            String,
+    client_request_time:    Instant,
+    last_client_message:    Option<MongoMessage>,
 }
 
 impl MongoStatsTracker {
@@ -56,6 +57,7 @@ impl MongoStatsTracker {
             client: MongoProtocolParser::new(),
             server: MongoProtocolParser::new(),
             client_addr: client_addr.clone(),
+            client_request_time: Instant::now(),
             last_client_message: None,
         }
     }
@@ -68,6 +70,7 @@ impl MongoStatsTracker {
             info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", msg);
             self.last_client_message = Some(msg);
+            self.client_request_time = Instant::now();
         }
     }
 
@@ -75,20 +78,19 @@ impl MongoStatsTracker {
         SERVER_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-
         if let Some(msg) = self.server.parse_buffer(buf) {
             info!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
             if let Some(client_msg) = &self.last_client_message {
                 info!("server: in response to: {}", client_msg);
             }
-            if self.server.header_time > self.client.header_time {
-                let time_to_first_byte = self.server.header_time.
-                    duration_since(self.client.header_time).as_millis() as f64;
-                SERVER_RESPONSE_TIME_SECONDS
-                    .with_label_values(&[&"foo", &"bar"])
-                    .observe(time_to_first_byte * 1000.0);
-            }
+
+        let time_to_response = self.client_request_time.elapsed().as_millis();
+        info!("request_time: {:?}, d: {}",
+            self.client_request_time, time_to_response);
+        SERVER_RESPONSE_TIME_SECONDS
+            .with_label_values(&[&"foo", &"bar"])
+            .observe(time_to_response as f64 / 1000.0);
         }
     }
 }
@@ -96,7 +98,6 @@ impl MongoStatsTracker {
 pub struct MongoProtocolParser {
     header: messages::MsgHeader,
     have_header: bool,
-    header_time: Instant,
     want_bytes: usize,
     message_buf: Vec<u8>,
     message_time: Instant,
@@ -110,7 +111,6 @@ impl MongoProtocolParser {
         MongoProtocolParser{
             header: MsgHeader::new(),
             have_header: false,
-            header_time: Instant::now(),
             want_bytes: messages::HEADER_LENGTH,
             message_buf: Vec::new(),
             message_time: Instant::now(),
@@ -153,7 +153,6 @@ impl MongoProtocolParser {
                         self.header = header;
                         self.have_header = true;
                         self.have_message = false;
-                        self.header_time = Instant::now();
                         self.want_bytes = self.header.message_length - messages::HEADER_LENGTH;
                         debug!("parser: have header {:?}, want {} more bytes", self.header, self.want_bytes);
                     },
