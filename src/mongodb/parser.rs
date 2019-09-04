@@ -85,24 +85,23 @@ impl MongoStatsTracker {
                 info!("server: in response to: {}", client_msg);
             }
 
-        let time_to_response = self.client_request_time.elapsed().as_millis();
-        info!("request_time: {:?}, d: {}",
-            self.client_request_time, time_to_response);
-        SERVER_RESPONSE_TIME_SECONDS
-            .with_label_values(&[&"foo", &"bar"])
-            .observe(time_to_response as f64 / 1000.0);
+            let time_to_response = self.client_request_time.elapsed().as_millis();
+            info!("request_time: {:?}, d: {}",
+                self.client_request_time, time_to_response);
+            SERVER_RESPONSE_TIME_SECONDS
+                .with_label_values(&[&"foo", &"bar"])
+                .observe(time_to_response as f64 / 1000.0);
         }
     }
 }
 
 pub struct MongoProtocolParser {
-    header: messages::MsgHeader,
-    have_header: bool,
-    want_bytes: usize,
-    message_buf: Vec<u8>,
-    message_time: Instant,
-    have_message: bool,
-    parser_active: bool,
+    header:         messages::MsgHeader,
+    have_header:    bool,
+    want_bytes:     usize,
+    message_buf:    Vec<u8>,
+    have_message:   bool,
+    parser_active:  bool,
 }
 
 impl MongoProtocolParser {
@@ -113,7 +112,6 @@ impl MongoProtocolParser {
             have_header: false,
             want_bytes: messages::HEADER_LENGTH,
             message_buf: Vec::new(),
-            message_time: Instant::now(),
             parser_active: true,
             have_message: false,
         }
@@ -166,7 +164,6 @@ impl MongoProtocolParser {
                 result = Some(extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]));
 
                 // We got the payload, time to ask for a header again
-                self.message_time = Instant::now();
                 self.have_header = false;
                 self.have_message = true;
                 self.want_bytes = messages::HEADER_LENGTH;
@@ -176,6 +173,11 @@ impl MongoProtocolParser {
             // And don't worry about performance, yet
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
             debug!("message_buf capacity={}", self.message_buf.capacity());
+        }
+
+        if self.message_buf.len() > 0 {
+            warn!("parser: {} surplus bytes in buf and I want {}.",
+                self.message_buf.len(), self.want_bytes);
         }
 
         result
