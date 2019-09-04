@@ -120,9 +120,9 @@ fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
     const SERVER: Token = Token(2);
 
     let poll = Poll::new().unwrap();
-    poll.register(&server_stream, SERVER, Ready::readable() | Ready::writable(),
+    poll.register(&server_stream, SERVER, Ready::readable(),
                   PollOpt::edge()).unwrap();
-    poll.register(&client_stream, CLIENT, Ready::readable() | Ready::writable(),
+    poll.register(&client_stream, CLIENT, Ready::readable(),
                   PollOpt::edge()).unwrap();
     let mut events = Events::with_capacity(1024);
 
