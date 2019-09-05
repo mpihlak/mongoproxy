@@ -83,7 +83,7 @@ impl fmt::Display for MsgHeader {
 pub struct MsgOpMsg {
     flag_bits:  u32,
     kind:       u8,
-    sections:   Vec<bson::Document>,
+    pub sections:   Vec<bson::Document>,
 }
 
 impl fmt::Display for MsgOpMsg {

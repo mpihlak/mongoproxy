@@ -68,6 +68,17 @@ impl MongoStatsTracker {
             info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", msg);
             self.client_request_time = Instant::now();
+
+            match msg {
+                MongoMessage::Msg(m) => {
+                    for s in m.sections {
+                        for elem in s.iter() {
+                            println!("element: {:?}", elem);
+                        }
+                    }
+                },
+                _ => {},
+            }
         }
     }
 
@@ -121,6 +132,8 @@ impl MongoProtocolParser {
     // the message is parsed we expect a header again and the process repeats.
     //
     // TODO: Stop the parser if any of the internal routines returns an error
+    // TODO: We probably don't need to return a Vec here, and do just 2 passes
+    // over the buffer to collect both the header *and* the message.
     //
     pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> Vec<MongoMessage> {
         let mut result = Vec::new();
@@ -131,6 +144,7 @@ impl MongoProtocolParser {
 
         self.message_buf.extend(buf);
 
+        let mut loop_counter = 0;
         while self.message_buf.len() >= self.want_bytes {
             // Make a note of how many bytes we got as we're going to
             // overwrite it later.
@@ -165,6 +179,8 @@ impl MongoProtocolParser {
             // And don't worry about performance, yet
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
             debug!("message_buf capacity={}", self.message_buf.capacity());
+            loop_counter += 1;
+            debug!("loop {}: {} bytes in buffer, want {}", loop_counter, self.message_buf.len(), self.want_bytes);
         }
 
         if self.message_buf.len() > 0 {
