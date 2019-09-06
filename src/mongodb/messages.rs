@@ -2,7 +2,7 @@ use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{self, Read, Write, Error, ErrorKind};
 use bson::{decode_document};
 use std::fmt;
-use log::{warn,info,debug};
+use log::{warn,debug};
 use num_derive::FromPrimitive;
 
 
@@ -63,6 +63,7 @@ impl MsgHeader {
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
     }
 
+    #[allow(dead_code)]
     pub fn write(&self, mut writer: impl Write) -> io::Result<()> {
         writer.write_u32::<LittleEndian>(self.message_length as u32)?;
         writer.write_u32::<LittleEndian>(self.request_id)?;
@@ -128,7 +129,7 @@ impl MsgOpMsg {
 
             match decode_document(&mut rdr) {
                 Ok(doc) => {
-                    info!("doc: {}", doc);
+                    debug!("doc: {}", doc);
                     sections.push(doc);
                 },
                 Err(e) => {
