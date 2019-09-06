@@ -64,7 +64,7 @@ impl MongoStatsTracker {
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for msg in self.client.parse_buffer(buf) {
+        if let Some(msg) = self.client.parse_buffer(buf) {
             info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", msg);
             self.client_request_time = Instant::now();
@@ -132,18 +132,15 @@ impl MongoProtocolParser {
     // the message is parsed we expect a header again and the process repeats.
     //
     // TODO: Stop the parser if any of the internal routines returns an error
-    // TODO: We probably don't need to return a Vec here, and do just 2 passes
-    // over the buffer to collect both the header *and* the message.
     //
-    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> Vec<MongoMessage> {
-        let mut result = Vec::new();
-
+    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> Option<MongoMessage> {
         if !self.parser_active {
-            return result;
+            return None;
         }
 
         self.message_buf.extend(buf);
 
+        let mut result = None;
         let mut loop_counter = 0;
         while self.message_buf.len() >= self.want_bytes {
             // Make a note of how many bytes we got as we're going to
@@ -167,7 +164,7 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                result.push(extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]));
+                result = Some(extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]));
 
                 // We got the payload, time to ask for a header again
                 self.have_header = false;
@@ -179,8 +176,8 @@ impl MongoProtocolParser {
             // And don't worry about performance, yet
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
             debug!("message_buf capacity={}", self.message_buf.capacity());
-            loop_counter += 1;
             debug!("loop {}: {} bytes in buffer, want {}", loop_counter, self.message_buf.len(), self.want_bytes);
+            loop_counter += 1;
         }
 
         if self.message_buf.len() > 0 {
@@ -231,9 +228,8 @@ fn test_parse_buffer_header() {
     hdr.write(&mut buf[..]).unwrap();
 
     let mut parser = MongoProtocolParser::new();
-    let result = parser.parse_buffer(&buf.to_vec());
+    let _result = parser.parse_buffer(&buf.to_vec());
 
-    assert_eq!(result.len(), 0);                // just the header
     assert_eq!(parser.have_header, true);
     assert_eq!(parser.have_message, false);
     assert_eq!(parser.want_bytes, 0);
