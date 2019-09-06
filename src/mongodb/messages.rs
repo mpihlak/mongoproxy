@@ -2,7 +2,7 @@ use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{self, Read, Write, Error, ErrorKind};
 use bson::{decode_document};
 use std::fmt;
-use log::{info};
+use log::{warn,info,debug};
 use num_derive::FromPrimitive;
 
 
@@ -82,14 +82,13 @@ impl fmt::Display for MsgHeader {
 #[derive(Debug)]
 pub struct MsgOpMsg {
     flag_bits:  u32,
-    kind:       u8,
     pub sections:   Vec<bson::Document>,
 }
 
 impl fmt::Display for MsgOpMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_MSG flags: {}, kind: {}\n",
-               self.flag_bits, self.kind)?;
+        write!(f, "OP_MSG flags: {}\n",
+               self.flag_bits)?;
         for (i, v)  in self.sections.iter().enumerate() {
             write!(f, "section {}: {}\n", i, v)?;
         }
@@ -100,27 +99,49 @@ impl fmt::Display for MsgOpMsg {
 impl MsgOpMsg {
     pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
         let flag_bits   = rdr.read_u32::<LittleEndian>()?;
-        let kind        = rdr.read_u8()?;
-
-        if kind != 0 {
-            let _section_size = rdr.read_i32::<LittleEndian>()?;
-            let _seq_id = read_c_string(&mut rdr)?;
-            info!("section_size={}, seq_id={}", _section_size, _seq_id);
-        }
+        debug!("flag_bits={:04x}", flag_bits);
 
         let mut sections = Vec::new();
 
-        // Note: that this is another one of those places where
-        // we are allocating based on what we receive on the wire.
-        // If the data is corrupted we might easily blow up here.
-        while let Ok(doc) = decode_document(&mut rdr) {
-            sections.push(doc);
+        loop {
+            let kind = match rdr.read_u8() {
+                Ok(r)   => r,
+                Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    // This is OK if we've already read at least one doc
+                    break;
+                },
+                Err(e)  => {
+                    warn!("error on read: {}", e);
+                    break;
+                },
+            };
+
+            if kind != 0 {
+                let section_size = rdr.read_u32::<LittleEndian>()? as usize;
+                let seq_id = read_c_string(&mut rdr)?;
+
+                // So looks like the section_size is actually the BSON document size
+                // plus the length of the Cstring and the 4 bytes for the size.
+                // We're going to ignore it, as the BSON doc has it's own size bytes.
+                debug!("section_size={}, seq_id={}", section_size, seq_id);
+            }
+
+            match decode_document(&mut rdr) {
+                Ok(doc) => {
+                    info!("doc: {}", doc);
+                    sections.push(doc);
+                },
+                Err(e) => {
+                    warn!("BSON decoder error: {:?}", e);
+                    break;
+                }
+            }
         }
 
         // Note: there may be checksum following, but we've probably eaten
         // it's bytes while trying to decode the section list.
 
-        Ok(MsgOpMsg{flag_bits, kind, sections})
+        Ok(MsgOpMsg{flag_bits, sections})
     }
 }
 
