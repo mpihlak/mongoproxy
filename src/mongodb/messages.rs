@@ -82,7 +82,7 @@ impl fmt::Display for MsgHeader {
 
 #[derive(Debug)]
 pub struct MsgOpMsg {
-    flag_bits:  u32,
+    flag_bits:      u32,
     pub sections:   Vec<bson::Document>,
 }
 
@@ -222,13 +222,18 @@ fn read_c_string(rdr: impl Read) -> io::Result<String> {
     Err(Error::new(ErrorKind::Other, "conversion error"))
 }
 
-#[test]
-fn test_read_cstring() {
-    let buf = b"kala\0";
-    let res = read_c_string(&buf[..]).unwrap();
-    assert_eq!(res, "kala");
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let buf = b"\0";
-    let res = read_c_string(&buf[..]).unwrap();
-    assert_eq!(res, "");
+    #[test]
+    fn test_read_cstring() {
+        let buf = b"kala\0";
+        let res = read_c_string(&buf[..]).unwrap();
+        assert_eq!(res, "kala");
+
+        let buf = b"\0";
+        let res = read_c_string(&buf[..]).unwrap();
+        assert_eq!(res, "");
+    }
 }
