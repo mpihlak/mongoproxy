@@ -1,6 +1,7 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MongoMessage,OpCode};
 use std::io::Read;
 use std::time::{Instant};
+use std::collections::HashMap;
 use log::{debug,info,warn};
 use prometheus::{CounterVec, HistogramVec};
 
@@ -28,7 +29,7 @@ lazy_static! {
         register_histogram_vec!(
             "server_response_time_seconds",
             "Backend response latency",
-            &["op", "collection"]).unwrap();
+            &["client", "op", "collection", "db"]).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -48,6 +49,9 @@ pub struct MongoStatsTracker {
     server:                 MongoProtocolParser,
     client_addr:            String,
     client_request_time:    Instant,
+    op:                     String,
+    collection:             String,
+    db:                     String,
 }
 
 impl MongoStatsTracker {
@@ -57,6 +61,9 @@ impl MongoStatsTracker {
             server: MongoProtocolParser::new(),
             client_addr: client_addr.clone(),
             client_request_time: Instant::now(),
+            op: String::from(""),
+            collection: String::from(""),
+            db: String::from(""),
         }
     }
 
@@ -69,11 +76,28 @@ impl MongoStatsTracker {
             info!("client: msg: {}", msg);
             self.client_request_time = Instant::now();
 
+            let _known_ops: HashMap<&str, i32> =
+                [("find", 1),
+                ("insert", 1),
+                ("delete", 1)]
+                .iter().cloned().collect();
+
+            self.op = String::from("");
+            self.collection = String::from("");
+            self.db = String::from("");
+
             match msg {
                 MongoMessage::Msg(m) => {
                     for s in m.sections {
                         for elem in s.iter().take(1) {
-                            println!("op: {:?}", elem);
+                            if _known_ops.contains_key(elem.0.as_str()) {
+                                self.op = elem.0.clone();
+                                self.collection = String::from(elem.1.as_str().unwrap());
+                                self.db = String::from(s.get_str("$db").unwrap());
+                                info!("known op: {} coll: {}", self.op, self.collection);
+                            } else {
+                                info!("op: {:?}", elem);
+                            }
                         }
                     }
                 },
@@ -91,8 +115,14 @@ impl MongoStatsTracker {
             info!("server: msg: {}", msg);
 
             let time_to_response = self.client_request_time.elapsed().as_millis();
+            let mut labels = HashMap::new();
+            labels.insert("client", self.client_addr.as_str());
             SERVER_RESPONSE_TIME_SECONDS
-                .with_label_values(&[&"foo", &"bar"])
+                .with_label_values(&[
+                    &self.client_addr,
+                    &self.op.as_str(),
+                    &self.collection.as_str(),
+                    &self.db.as_str()])
                 .observe(time_to_response as f64 / 1000.0);
         }
     }
