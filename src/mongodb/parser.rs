@@ -72,8 +72,8 @@ impl MongoStatsTracker {
             match msg {
                 MongoMessage::Msg(m) => {
                     for s in m.sections {
-                        for elem in s.iter() {
-                            println!("element: {:?}", elem);
+                        for elem in s.iter().take(1) {
+                            println!("op: {:?}", elem);
                         }
                     }
                 },
@@ -142,7 +142,7 @@ impl MongoProtocolParser {
 
         let mut result = None;
         let mut loop_counter = 0;
-        while self.message_buf.len() >= self.want_bytes {
+        while self.want_bytes > 0 && self.message_buf.len() >= self.want_bytes && loop_counter < 2 {
             // Make a note of how many bytes we got as we're going to
             // overwrite it later.
             let new_buffer_start = self.want_bytes;
@@ -175,7 +175,6 @@ impl MongoProtocolParser {
             // Point the message_buf to the bytes that we haven't yet processed
             // And don't worry about performance, yet
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
-            debug!("message_buf capacity={}", self.message_buf.capacity());
             debug!("loop {}: {} bytes in buffer, want {}", loop_counter, self.message_buf.len(), self.want_bytes);
             loop_counter += 1;
         }
@@ -185,6 +184,7 @@ impl MongoProtocolParser {
                 self.message_buf.len(), self.want_bytes);
         }
 
+        debug!("result={:?}", result);
         result
     }
 }
@@ -215,22 +215,35 @@ fn extract_message(op_code: u32, mut rdr: impl Read) -> MongoMessage {
     return MongoMessage::None;
 }
 
-#[test]
-fn test_parse_buffer_header() {
-    let hdr = MsgHeader {
-        message_length: messages::HEADER_LENGTH,
-        request_id: 1234,
-        response_to: 5678,
-        op_code: 1,
-    };
+#[cfg(test)]
+mod tests {
 
-    let mut buf = [0 as u8; messages::HEADER_LENGTH];
-    hdr.write(&mut buf[..]).unwrap();
+    use super::*;
 
-    let mut parser = MongoProtocolParser::new();
-    let _result = parser.parse_buffer(&buf.to_vec());
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
 
-    assert_eq!(parser.have_header, true);
-    assert_eq!(parser.have_message, false);
-    assert_eq!(parser.want_bytes, 0);
+    #[test]
+    fn test_parse_buffer_header() {
+        init();
+
+        let hdr = MsgHeader {
+            message_length: messages::HEADER_LENGTH,
+            request_id: 1234,
+            response_to: 5678,
+            op_code: 1,
+        };
+
+        let mut buf = [0 as u8; messages::HEADER_LENGTH];
+        hdr.write(&mut buf[..]).unwrap();
+
+        let mut parser = MongoProtocolParser::new();
+        let _result = parser.parse_buffer(&buf.to_vec());
+
+        assert_eq!(parser.have_header, true);
+        assert_eq!(parser.have_message, false);
+        assert_eq!(parser.want_bytes, 0);
+    }
+
 }
