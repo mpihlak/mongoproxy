@@ -11,7 +11,7 @@ lazy_static! {
         register_counter_vec!(
             "opcode_count_total",
             "Number of different opcodes encountered",
-            &["opcode"]).unwrap();
+            &["op_code"]).unwrap();
 
     static ref UNSUPPORTED_OPCODE_COUNTER: CounterVec =
         register_counter_vec!(
