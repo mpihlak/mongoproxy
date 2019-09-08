@@ -118,6 +118,9 @@ impl MongoStatsTracker{
 
         match &self.client_message {
             MongoMessage::Msg(m) => {
+                // Go and loop through all the sections and see if we find an
+                // operation that we know. This should be the first key of the
+                // doc so we only look at first key of each section.
                 for s in m.sections.iter() {
                     for elem in s.iter().take(1) {
                         if known_ops.contains(elem.0.as_str()) {
