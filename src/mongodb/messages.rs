@@ -12,11 +12,13 @@ pub const HEADER_LENGTH: usize = 16;
 #[derive(FromPrimitive)]
 pub enum OpCode{
     OpReply = 1,
+    OpUpdate = 2001,
+    OpInsert = 2002,
     OpQuery = 2004,
+    OpDelete = 2006,
     OpMsg = 2013,
     OpPing = 2010,
     OpPong = 2011,
-    OpUpdate = 2001,
 }
 
 #[derive(Debug)]
@@ -25,16 +27,21 @@ pub enum MongoMessage {
     Query(MsgOpQuery),
     Reply(MsgOpReply),
     Update(MsgOpUpdate),
+    Delete(MsgOpDelete),
+    Insert(MsgOpInsert),
     None,
 }
 
 impl fmt::Display for MongoMessage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         return match self {
+            // TODO: Surely this can be handled more elegantly, perhaps with trait impl
             MongoMessage::Msg(m) => m.fmt(f),
             MongoMessage::Query(m) => m.fmt(f),
             MongoMessage::Reply(m) => m.fmt(f),
             MongoMessage::Update(m) => m.fmt(f),
+            MongoMessage::Delete(m) => m.fmt(f),
+            MongoMessage::Insert(m) => m.fmt(f),
             MongoMessage::None => "(None)".fmt(f),
         }
     }
@@ -203,6 +210,55 @@ impl MsgOpUpdate {
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
         Ok(MsgOpUpdate{flags, full_collection_name, selector, update})
+    }
+}
+
+#[derive(Debug)]
+pub struct MsgOpDelete {
+    pub full_collection_name: String,
+    flags: u32,
+    selector: bson::Document,
+}
+
+impl fmt::Display for MsgOpDelete {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OP_DELETE flags: {}, collection: {}",
+               self.flags, self.full_collection_name)
+    }
+}
+
+impl MsgOpDelete {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+        let _zero = rdr.read_u32::<LittleEndian>()?;
+        let full_collection_name = read_c_string(&mut rdr)?;
+        let flags = rdr.read_u32::<LittleEndian>()?;
+        let selector = match decode_document(&mut rdr) {
+            Ok(doc) => doc,
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        };
+        Ok(MsgOpDelete{flags, full_collection_name, selector})
+    }
+}
+
+#[derive(Debug)]
+pub struct MsgOpInsert {
+    flags: u32,
+    pub full_collection_name: String,
+}
+
+impl fmt::Display for MsgOpInsert {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OP_INSERT flags: {}, collection: {}",
+               self.flags, self.full_collection_name)
+    }
+}
+
+impl MsgOpInsert {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+        let flags = rdr.read_u32::<LittleEndian>()?;
+        let full_collection_name = read_c_string(&mut rdr)?;
+        // Ignore the documents, we don't need anything from there
+        Ok(MsgOpInsert{flags, full_collection_name})
     }
 }
 

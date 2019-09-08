@@ -1,4 +1,4 @@
-use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MsgOpUpdate,MongoMessage,OpCode};
+use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage,OpCode};
 use std::io::{self,Read};
 use std::time::{Instant};
 use std::collections::{HashMap, HashSet};
@@ -259,6 +259,12 @@ fn extract_message(op_code: u32, mut rdr: impl Read) -> io::Result<MongoMessage>
         },
         Some(OpCode::OpUpdate) => {
             return Ok(MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr)?));
+        },
+        Some(OpCode::OpDelete) => {
+            return Ok(MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr)?));
+        },
+        Some(OpCode::OpInsert) => {
+            return Ok(MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr)?));
         },
         Some(OpCode::OpMsg) => {
             return Ok(MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr)?));
