@@ -130,13 +130,16 @@ impl MongoStatsTracker{
                 }
             },
             MongoMessage::Query(m) => {
-                result.insert("op", "query");
-                if let Some(pos) = m.full_collection_name.find('.') {
-                    let (db, collection) = m.full_collection_name.split_at(pos);
-                    let collection = &collection[1..];
-                    result.insert("db", db);
-                    result.insert("collection", collection);
-                }
+                add_collection_labels(&mut result, "query", &m.full_collection_name);
+            },
+            MongoMessage::Insert(m) => {
+                add_collection_labels(&mut result, "insert", &m.full_collection_name);
+            },
+            MongoMessage::Update(m) => {
+                add_collection_labels(&mut result, "update", &m.full_collection_name);
+            },
+            MongoMessage::Delete(m) => {
+                add_collection_labels(&mut result, "delete", &m.full_collection_name);
             },
             other => {
                 warn!("Labels not implemented for {}", other);
@@ -145,7 +148,21 @@ impl MongoStatsTracker{
 
         result
     }
+}
 
+fn add_collection_labels<'a>(
+        labels: &mut HashMap<&'a str, &'a str>,
+        op_name: &'a str,
+        full_collection_name: &'a String) {
+    labels.insert("op", op_name);
+    if let Some(pos) = full_collection_name.find('.') {
+        let (db, collection) = full_collection_name.split_at(pos);
+        labels.insert("db", db);
+        labels.insert("collection", &collection[1..]);
+    } else {
+        labels.insert("db", "");
+        labels.insert("collection", "");
+    }
 }
 
 pub struct MongoProtocolParser {
