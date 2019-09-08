@@ -332,4 +332,28 @@ mod tests {
         assert_eq!(parser.want_bytes, 0);
     }
 
+    #[test]
+    fn test_parse_msg() {
+        init();
+
+        let hdr = MsgHeader {
+            message_length: messages::HEADER_LENGTH,
+            request_id: 1234,
+            response_to: 5678,
+            op_code: 2013,
+        };
+
+        let mut buf = Vec::new();
+        hdr.write(&mut buf).unwrap();
+
+        let msg = MsgOpMsg{
+            flag_bits: 0,
+            sections: Vec::new(),
+        };
+
+        // TODO
+        // msg.sections.push() and push
+
+        msg.write(&mut buf).unwrap();
+    }
 }

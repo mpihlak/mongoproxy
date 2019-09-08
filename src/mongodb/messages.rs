@@ -92,7 +92,7 @@ impl fmt::Display for MsgHeader {
 
 #[derive(Debug)]
 pub struct MsgOpMsg {
-    flag_bits:      u32,
+    pub flag_bits:  u32,
     pub sections:   Vec<bson::Document>,
 }
 
@@ -154,6 +154,26 @@ impl MsgOpMsg {
 
         Ok(MsgOpMsg{flag_bits, sections})
     }
+
+    #[allow(dead_code)]
+    pub fn write(&self, mut writer: impl Write) -> io::Result<()> {
+        writer.write_u32::<LittleEndian>(self.flag_bits)?;
+        for section in self.sections.iter() {
+            let mut buf = Vec::new();
+            bson::encode_document(&mut buf, section).unwrap();
+
+            let seq_id = "documents";
+            let seq_len = 1 + seq_id.len() + buf.len();
+
+            writer.write_u8(1)?;    // "kind" byte
+            writer.write_u32::<LittleEndian>(seq_len as u32)?;
+            writer.write(seq_id.as_bytes())?;
+            writer.write_u8(0)?;    // terminator for the cstring
+            writer.write_all(&buf[..])?;
+        }
+        Ok(())
+    }
+
 }
 
 #[derive(Debug)]
