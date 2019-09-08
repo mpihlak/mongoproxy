@@ -198,8 +198,6 @@ impl MongoProtocolParser {
     // we try to read message length worth of bytes and parse the message. Once
     // the message is parsed we expect a header again and the process repeats.
     //
-    // TODO: Stop the parser if any of the internal routines returns an error
-    //
     pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> Option<MongoMessage> {
         if !self.parser_active {
             return None;
