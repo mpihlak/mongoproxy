@@ -1,8 +1,8 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MongoMessage,OpCode};
-use std::io::Read;
+use std::io::{self,Read};
 use std::time::{Instant};
 use std::collections::{HashMap, HashSet};
-use log::{debug,info,warn};
+use log::{debug,info,warn,error};
 use prometheus::{CounterVec, HistogramVec};
 
 
@@ -110,7 +110,9 @@ impl MongoStatsTracker{
                     for elem in s.iter().take(1) {
                         if known_ops.contains(elem.0.as_str()) {
                             result.insert("op", elem.0.as_str());
-                            result.insert("collection", elem.1.as_str().unwrap());
+                            if let Some(collection) = elem.1.as_str() {
+                                result.insert("collection", collection);
+                            }
                             info!("known op: {} coll: {:?}", elem.0, elem.1.as_str());
                         } else {
                             info!("op: {:?}", elem);
@@ -181,7 +183,7 @@ impl MongoProtocolParser {
 
         self.message_buf.extend(buf);
 
-        let mut result = None;
+        let mut result = MongoMessage::None;
         let mut loop_counter = 0;
         while self.want_bytes > 0 && self.message_buf.len() >= self.want_bytes && loop_counter < 2 {
             // Make a note of how many bytes we got as we're going to
@@ -205,8 +207,16 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                result = Some(extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]));
-
+                match extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]) {
+                    Ok(res) => {
+                        result = res;
+                    },
+                    Err(e) => {
+                        error!("Error extracting message: {}", e);
+                        self.parser_active = false;
+                        return None;
+                    }
+                }
                 // We got the payload, time to ask for a header again
                 self.have_header = false;
                 self.have_message = true;
@@ -226,25 +236,22 @@ impl MongoProtocolParser {
         }
 
         debug!("result={:?}", result);
-        result
+        Some(result)
     }
 }
 
-fn extract_message(op_code: u32, mut rdr: impl Read) -> MongoMessage {
+fn extract_message(op_code: u32, mut rdr: impl Read) -> io::Result<MongoMessage> {
     OPCODE_COUNTER.with_label_values(&[&op_code.to_string()]).inc();
 
     match num_traits::FromPrimitive::from_u32(op_code) {
         Some(OpCode::OpReply) => {
-            let msg = MsgOpReply::from_reader(&mut rdr).unwrap();
-            return MongoMessage::Reply(msg);
+            return Ok(MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr)?));
         }
         Some(OpCode::OpQuery) => {
-            let msg = MsgOpQuery::from_reader(&mut rdr).unwrap();
-            return MongoMessage::Query(msg);
+            return Ok(MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr)?));
         },
         Some(OpCode::OpMsg) => {
-            let msg = MsgOpMsg::from_reader(&mut rdr).unwrap();
-            return MongoMessage::Msg(msg);
+            return Ok(MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr)?));
         },
         Some(OpCode::OpPing) => {},
         Some(OpCode::OpPong) => {},
@@ -253,7 +260,7 @@ fn extract_message(op_code: u32, mut rdr: impl Read) -> MongoMessage {
             warn!("Unhandled OP: {}", op_code);
         },
     }
-    return MongoMessage::None;
+    return Ok(MongoMessage::None);
 }
 
 #[cfg(test)]
