@@ -78,7 +78,7 @@ impl MongoStatsTracker{
                 return;
             }
             self.client_message = msg;
-            info!("client: hdr: {}", self.client.header);
+            debug!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", self.client_message);
             self.client_request_time = Instant::now();
         }
@@ -93,7 +93,7 @@ impl MongoStatsTracker{
                 continue;
             }
 
-            info!("server: hdr: {}", self.server.header);
+            debug!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
 
             let mut labels = self.extract_labels();
@@ -114,7 +114,7 @@ impl MongoStatsTracker{
         result.insert("db", "");
 
         let known_ops: HashSet<&'static str> =
-            ["find", "insert", "delete"].iter().cloned().collect();
+            ["find", "insert", "delete", "update"].iter().cloned().collect();
 
         match &self.client_message {
             MongoMessage::Msg(m) => {
@@ -128,7 +128,7 @@ impl MongoStatsTracker{
                             if let Some(collection) = elem.1.as_str() {
                                 result.insert("collection", collection);
                             }
-                            info!("known op: {} coll: {:?}", elem.0, elem.1.as_str());
+                            debug!("known op: {} coll: {:?}", elem.0, elem.1.as_str());
                         } else {
                             UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&elem.0.as_str()]).inc();
                             warn!("unrecognized op: {:?}", elem);
