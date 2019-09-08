@@ -149,7 +149,7 @@ impl MsgOpMsg {
 #[derive(Debug)]
 pub struct MsgOpQuery {
     flags:  u32,
-    full_collection_name: String,
+    pub full_collection_name: String,
     number_to_skip: i32,
     number_to_return: i32,
 }

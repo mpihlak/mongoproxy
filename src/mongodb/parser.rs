@@ -1,7 +1,7 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MongoMessage,OpCode};
 use std::io::Read;
 use std::time::{Instant};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use log::{debug,info,warn};
 use prometheus::{CounterVec, HistogramVec};
 
@@ -49,21 +49,17 @@ pub struct MongoStatsTracker {
     server:                 MongoProtocolParser,
     client_addr:            String,
     client_request_time:    Instant,
-    op:                     String,
-    collection:             String,
-    db:                     String,
+    client_message:         MongoMessage,
 }
 
-impl MongoStatsTracker {
+impl MongoStatsTracker{
     pub fn new(client_addr: &String) -> Self {
         MongoStatsTracker {
             client: MongoProtocolParser::new(),
             server: MongoProtocolParser::new(),
             client_addr: client_addr.clone(),
             client_request_time: Instant::now(),
-            op: String::from(""),
-            collection: String::from(""),
-            db: String::from(""),
+            client_message: MongoMessage::None,
         }
     }
 
@@ -72,37 +68,11 @@ impl MongoStatsTracker {
             .inc_by(buf.len() as f64);
 
         if let Some(msg) = self.client.parse_buffer(buf) {
+            self.client_message = msg;
+
             info!("client: hdr: {}", self.client.header);
-            info!("client: msg: {}", msg);
+            info!("client: msg: {}", self.client_message);
             self.client_request_time = Instant::now();
-
-            let _known_ops: HashMap<&str, i32> =
-                [("find", 1),
-                ("insert", 1),
-                ("delete", 1)]
-                .iter().cloned().collect();
-
-            self.op = String::from("");
-            self.collection = String::from("");
-            self.db = String::from("");
-
-            match msg {
-                MongoMessage::Msg(m) => {
-                    for s in m.sections {
-                        for elem in s.iter().take(1) {
-                            if _known_ops.contains_key(elem.0.as_str()) {
-                                self.op = elem.0.clone();
-                                self.collection = String::from(elem.1.as_str().unwrap());
-                                self.db = String::from(s.get_str("$db").unwrap());
-                                info!("known op: {} coll: {}", self.op, self.collection);
-                            } else {
-                                info!("op: {:?}", elem);
-                            }
-                        }
-                    }
-                },
-                _ => {},
-            }
         }
     }
 
@@ -114,18 +84,59 @@ impl MongoStatsTracker {
             info!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
 
+            let mut labels = self.extract_labels();
             let time_to_response = self.client_request_time.elapsed().as_millis();
-            let mut labels = HashMap::new();
             labels.insert("client", self.client_addr.as_str());
             SERVER_RESPONSE_TIME_SECONDS
-                .with_label_values(&[
-                    &self.client_addr,
-                    &self.op.as_str(),
-                    &self.collection.as_str(),
-                    &self.db.as_str()])
+                .with(&labels)
                 .observe(time_to_response as f64 / 1000.0);
         }
     }
+
+    pub fn extract_labels(&self) -> HashMap<&str, &str> {
+        let mut result = HashMap::new();
+
+        // Put in some defaults, so that we dont crash on metrics
+        result.insert("op", "");
+        result.insert("collection", "");
+        result.insert("db", "");
+
+        let known_ops: HashSet<&'static str> =
+            ["find", "insert", "delete"].iter().cloned().collect();
+
+        match &self.client_message {
+            MongoMessage::Msg(m) => {
+                for s in m.sections.iter() {
+                    for elem in s.iter().take(1) {
+                        if known_ops.contains(elem.0.as_str()) {
+                            result.insert("op", elem.0.as_str());
+                            result.insert("collection", elem.1.as_str().unwrap());
+                            info!("known op: {} coll: {:?}", elem.0, elem.1.as_str());
+                        } else {
+                            info!("op: {:?}", elem);
+                        }
+                    }
+                    if let Ok(db) = s.get_str("$db") {
+                        result.insert("db", db);
+                    }
+                }
+            },
+            MongoMessage::Query(m) => {
+                result.insert("op", "query");
+                if let Some(pos) = m.full_collection_name.find('.') {
+                    let (db, collection) = m.full_collection_name.split_at(pos+1);
+                    result.insert("db", db);
+                    result.insert("collection", collection);
+                }
+            },
+            other => {
+                warn!("Labels not implemented for {}", other);
+            },
+        }
+
+        result
+    }
+
 }
 
 pub struct MongoProtocolParser {
