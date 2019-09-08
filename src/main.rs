@@ -6,6 +6,8 @@ use std::{thread, str};
 use log::{info,warn,debug};
 use prometheus::{CounterVec,Counter,Encoder,TextEncoder};
 use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
+use clap::{Arg, App};
+
 use env_logger;
 
 #[macro_use]
@@ -18,8 +20,8 @@ mod mongodb;
 use mongodb::parser::{MongoStatsTracker};
 
 const SERVER_ADDR: &str = "127.0.0.1:27017";
-const LISTEN_ADDR: &str = "127.0.0.1:27111";
-const METRICS_ADDR: &str = "127.0.0.1:9898";
+const LISTEN_ADDR: &str = "0.0.0.0:27111";
+const METRICS_ADDR: &str = "0.0.0.0:9898";
 
 lazy_static! {
     static ref CONNECTION_COUNT_TOTAL: CounterVec =
@@ -35,13 +37,46 @@ lazy_static! {
 }
 
 fn main() {
+    let matches = App::new("mongoproxy")
+        .version("0.1.0")
+        .about("Proxies MongoDb requests to obtain metrics")
+        .arg(Arg::with_name("server_addr")
+            .short("h")
+            .long("hostport")
+            .value_name("server host:port")
+            .help("MongoDb server hostport to proxy to")
+            .takes_value(true)
+            .required(true))
+        .arg(Arg::with_name("listen_addr")
+            .short("l")
+            .long("listen")
+            .value_name("LISTEN_ADDR")
+            .help("Hostport where the proxy will listen on (0.0.0.0:27111)")
+            .takes_value(true))
+        .arg(Arg::with_name("metrics_addr")
+            .short("m")
+            .long("metrics")
+            .value_name("METRICS_ADDR")
+            .help("Hostport for Prometheus metrics endpoint")
+            .takes_value(true))
+        .arg(Arg::with_name("v")
+            .short("v")
+            .multiple(true)
+            .help("Sets the level of verbosity")
+        ).get_matches();
+
+    let server_addr = String::from(matches.value_of("server_addr").unwrap_or(SERVER_ADDR));
+    let listen_addr = matches.value_of("listen_addr").unwrap_or(LISTEN_ADDR);
+    let metrics_addrs = matches.value_of("metrics_addr").unwrap_or(METRICS_ADDR);
+
     env_logger::init();
 
-    let listener = TcpListener::bind(LISTEN_ADDR).unwrap();
-    info!("Listening on {}", LISTEN_ADDR);
+    let listener = TcpListener::bind(listen_addr).unwrap();
+    info!("Listening on {}", listen_addr);
+    info!(" proxying to {}", server_addr);
 
-    start_metrics_listener(METRICS_ADDR);
-    info!("Metrics endpoint at http://{}", METRICS_ADDR);
+    start_metrics_listener(metrics_addrs);
+    info!("Metrics endpoint at http://{}", metrics_addrs);
 
     info!("^C to exit");
 
@@ -49,11 +84,12 @@ fn main() {
         match stream {
             Ok(stream) => {
                 let peer_addr = stream.peer_addr().unwrap().clone();
+                let server_addr = server_addr.clone();
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&peer_addr.to_string()]).inc();
 
                 thread::spawn(move || {
                     info!("new connection from {}", peer_addr);
-                    match handle_connection(TcpStream::from_stream(stream).unwrap()) {
+                    match handle_connection(server_addr, TcpStream::from_stream(stream).unwrap()) {
                         Ok(_) => info!("{} closing connection.", peer_addr),
                         Err(e) => {
                             warn!("{} connection error: {}", peer_addr, e);
@@ -106,9 +142,9 @@ pub fn start_metrics_listener(endpoint: &str) {
 // The difficulty there would be reassembling the stream, and we wouldn't
 // easily able to track connections that have already been established.
 //
-fn handle_connection(mut client_stream: TcpStream) -> std::io::Result<()> {
-    info!("connecting to server: {}", SERVER_ADDR);
-    let mut server_stream = TcpStream::connect(&SERVER_ADDR.parse().unwrap())?;
+fn handle_connection(server_addr: String, mut client_stream: TcpStream) -> std::io::Result<()> {
+    info!("connecting to server: {}", server_addr);
+    let mut server_stream = TcpStream::connect(&server_addr.parse().unwrap())?;
 
     let client_addr = client_stream.peer_addr().unwrap().to_string();
 
