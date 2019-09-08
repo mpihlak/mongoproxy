@@ -1,4 +1,4 @@
-use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MongoMessage,OpCode};
+use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MsgOpUpdate,MongoMessage,OpCode};
 use std::io::{self,Read};
 use std::time::{Instant};
 use std::collections::{HashMap, HashSet};
@@ -68,8 +68,10 @@ impl MongoStatsTracker{
             .inc_by(buf.len() as f64);
 
         if let Some(msg) = self.client.parse_buffer(buf) {
+            if let MongoMessage::None = msg {
+                return;
+            }
             self.client_message = msg;
-
             info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", self.client_message);
             self.client_request_time = Instant::now();
@@ -81,6 +83,10 @@ impl MongoStatsTracker{
             .inc_by(buf.len() as f64);
 
         for msg in self.server.parse_buffer(buf) {
+            if let MongoMessage::None = msg {
+                continue;
+            }
+
             info!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
 
@@ -126,7 +132,8 @@ impl MongoStatsTracker{
             MongoMessage::Query(m) => {
                 result.insert("op", "query");
                 if let Some(pos) = m.full_collection_name.find('.') {
-                    let (db, collection) = m.full_collection_name.split_at(pos+1);
+                    let (db, collection) = m.full_collection_name.split_at(pos);
+                    let collection = &collection[1..];
                     result.insert("db", db);
                     result.insert("collection", collection);
                 }
@@ -249,6 +256,9 @@ fn extract_message(op_code: u32, mut rdr: impl Read) -> io::Result<MongoMessage>
         }
         Some(OpCode::OpQuery) => {
             return Ok(MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr)?));
+        },
+        Some(OpCode::OpUpdate) => {
+            return Ok(MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr)?));
         },
         Some(OpCode::OpMsg) => {
             return Ok(MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr)?));

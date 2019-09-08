@@ -16,6 +16,7 @@ pub enum OpCode{
     OpMsg = 2013,
     OpPing = 2010,
     OpPong = 2011,
+    OpUpdate = 2001,
 }
 
 #[derive(Debug)]
@@ -23,6 +24,7 @@ pub enum MongoMessage {
     Msg(MsgOpMsg),
     Query(MsgOpQuery),
     Reply(MsgOpReply),
+    Update(MsgOpUpdate),
     None,
 }
 
@@ -32,6 +34,7 @@ impl fmt::Display for MongoMessage {
             MongoMessage::Msg(m) => m.fmt(f),
             MongoMessage::Query(m) => m.fmt(f),
             MongoMessage::Reply(m) => m.fmt(f),
+            MongoMessage::Update(m) => m.fmt(f),
             MongoMessage::None => "(None)".fmt(f),
         }
     }
@@ -168,6 +171,38 @@ impl MsgOpQuery {
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
         let number_to_return = rdr.read_i32::<LittleEndian>()?;
         Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return})
+    }
+}
+
+#[derive(Debug)]
+pub struct MsgOpUpdate {
+    pub full_collection_name: String,
+    flags: u32,
+    selector: bson::Document,
+    update: bson::Document,
+}
+
+impl fmt::Display for MsgOpUpdate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OP_UPDATE flags: {}, collection: {}",
+               self.flags, self.full_collection_name)
+    }
+}
+
+impl MsgOpUpdate {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+        let _zero = rdr.read_u32::<LittleEndian>()?;
+        let full_collection_name = read_c_string(&mut rdr)?;
+        let flags = rdr.read_u32::<LittleEndian>()?;
+        let selector = match decode_document(&mut rdr) {
+            Ok(doc) => doc,
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        };
+        let update = match decode_document(&mut rdr) {
+            Ok(doc) => doc,
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        };
+        Ok(MsgOpUpdate{flags, full_collection_name, selector, update})
     }
 }
 
