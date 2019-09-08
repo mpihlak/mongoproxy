@@ -339,24 +339,43 @@ mod tests {
     fn test_parse_msg() {
         init();
 
+        let mut msg = MsgOpMsg{ flag_bits: 0, sections: Vec::new() };
+
+        // Craft a MongoDb OP_MSG. Something like: { insert: "kala", $db: "test" }
+        let mut doc = bson::Document::new();
+        doc.insert("insert".to_owned(), bson::Bson::String("foo".to_owned()));
+        msg.sections.push(doc);
+
+        // Write the document to get the encoded length
+        let mut msg_buf = Vec::new();
+        msg.write(&mut msg_buf).unwrap();
+
+        // Now that we know the message lengthg, consruct the header and write the
+        // whole message out.
+        let mut buf = Vec::new();
         let hdr = MsgHeader {
-            message_length: messages::HEADER_LENGTH,
+            message_length: messages::HEADER_LENGTH + msg_buf.len(),
             request_id: 1234,
             response_to: 5678,
             op_code: 2013,
         };
 
-        let mut buf = Vec::new();
         hdr.write(&mut buf).unwrap();
+        buf.extend(msg_buf);
 
-        let msg = MsgOpMsg{
-            flag_bits: 0,
-            sections: Vec::new(),
-        };
+        let mut parser = MongoProtocolParser::new();
+        match parser.parse_buffer(&buf) {
+            Some(MongoMessage::Msg(m)) => {
+                assert_eq!(m.sections.len(), 1);
+                let doc = &m.sections[0];
+                assert_eq!(doc.get_str("insert").unwrap(), "foo");
+            },
+            other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
+        }
 
-        // TODO
-        // msg.sections.push() and push
-
-        msg.write(&mut buf).unwrap();
+        assert_eq!(parser.have_header, false);
+        assert_eq!(parser.have_message, true);
+        assert_eq!(parser.parser_active, true);
+        assert_eq!(parser.want_bytes, messages::HEADER_LENGTH);
     }
 }
