@@ -15,9 +15,15 @@ lazy_static! {
 
     static ref UNSUPPORTED_OPCODE_COUNTER: CounterVec =
         register_counter_vec!(
-            "unsupported_opcode_count_total",
+            "unsupported_op_code_count_total",
             "Number of unrecognized opcodes in MongoDb header",
-            &["opcode"]).unwrap();
+            &["op_code"]).unwrap();
+
+    static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
+        register_counter_vec!(
+            "unsupported_op_name_count_total",
+            "Number of unrecognized op names in MongoDb response",
+            &["op_name"]).unwrap();
 
     static ref HEADER_PARSE_ERRORS_COUNTER: CounterVec =
         register_counter_vec!(
@@ -121,7 +127,8 @@ impl MongoStatsTracker{
                             }
                             info!("known op: {} coll: {:?}", elem.0, elem.1.as_str());
                         } else {
-                            info!("op: {:?}", elem);
+                            UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&elem.0.as_str()]).inc();
+                            warn!("unrecognized op: {:?}", elem);
                         }
                     }
                     if let Ok(db) = s.get_str("$db") {
