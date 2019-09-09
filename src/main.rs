@@ -17,7 +17,7 @@ extern crate lazy_static;
 
 mod mongodb;
 
-use mongodb::parser::{MongoStatsTracker};
+use mongodb::tracker::{MongoStatsTracker};
 
 const SERVER_ADDR: &str = "127.0.0.1:27017";
 const LISTEN_ADDR: &str = "0.0.0.0:27111";
