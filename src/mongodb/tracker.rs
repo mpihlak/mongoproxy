@@ -95,8 +95,9 @@ impl MongoStatsTracker{
         result.insert("collection", "");
         result.insert("db", "");
 
-        let known_ops: HashSet<&'static str> =
-            ["find", "insert", "delete", "update"].iter().cloned().collect();
+        let collection_ops: HashSet<&'static str> =
+            ["find", "insert", "delete", "update", "count", "getMore", "aggregate"]
+                .iter().cloned().collect();
 
         match &self.client_message {
             MongoMessage::Msg(m) => {
@@ -105,16 +106,21 @@ impl MongoStatsTracker{
                 // doc so we only look at first key of each section.
                 for s in m.sections.iter() {
                     for elem in s.iter().take(1) {
-                        if known_ops.contains(elem.0.as_str()) {
-                            result.insert("op", elem.0.as_str());
+                        // Always track the operation, even if we're unable to get any
+                        // additional details for it.
+                        result.insert("op", elem.0.as_str());
+
+                        if collection_ops.contains(elem.0.as_str()) {
                             if let Some(collection) = elem.1.as_str() {
                                 result.insert("collection", collection);
                             }
-                            debug!("known op: {} coll: {:?}", elem.0, elem.1.as_str());
                         } else {
                             UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&elem.0.as_str()]).inc();
-                            warn!("unrecognized op: {:?}", elem);
                         }
+                    }
+                    if let Ok(collection) = s.get_str("collection") {
+                        // getMore has collection as an explicit field, support that
+                        result.insert("collection", collection);
                     }
                     if let Ok(db) = s.get_str("$db") {
                         result.insert("db", db);

@@ -112,7 +112,8 @@ impl MongoProtocolParser {
             loop_counter += 1;
         }
 
-        if self.message_buf.len() > 0 {
+        if self.message_buf.len() >= self.want_bytes {
+            // Warn if we could've immediately returned another message
             warn!("parser: {} surplus bytes in buf and I want {}.",
                 self.message_buf.len(), self.want_bytes);
         }
