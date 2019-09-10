@@ -2,8 +2,8 @@ use super::messages::{MongoMessage};
 use super::parser::MongoProtocolParser;
 use std::time::{Instant};
 use std::collections::{HashMap, HashSet};
-use log::{debug,info,warn};
-use prometheus::{CounterVec, HistogramVec};
+use log::{info,warn};
+use prometheus::{Counter, CounterVec, HistogramVec};
 
 
 lazy_static! {
@@ -12,6 +12,12 @@ lazy_static! {
             "unsupported_op_name_count_total",
             "Number of unrecognized op names in MongoDb response",
             &["op_name"]).unwrap();
+
+    static ref RESPONSE_TO_REQUEST_MISMATCH: Counter =
+        register_counter!(
+            "response_to_request_id_mismatch",
+            "Number of occurrences where we don't have a matching client request for the response"
+            ).unwrap();
 
     static ref SERVER_RESPONSE_TIME_SECONDS: HistogramVec =
         register_histogram_vec!(
@@ -60,7 +66,7 @@ impl MongoStatsTracker{
                 return;
             }
             self.client_message = msg;
-            debug!("client: hdr: {}", self.client.header);
+            info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", self.client_message);
             self.client_request_time = Instant::now();
         }
@@ -75,12 +81,19 @@ impl MongoStatsTracker{
                 continue;
             }
 
-            debug!("server: hdr: {}", self.server.header);
+            info!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
 
             let mut labels = self.extract_labels();
             let time_to_response = self.client_request_time.elapsed().as_millis();
             labels.insert("client", self.client_addr.as_str());
+
+            if self.server.header.response_to != self.client.header.request_id {
+                RESPONSE_TO_REQUEST_MISMATCH.inc();
+                warn!("server response to {}, does not match client request {}",
+                    self.server.header.response_to, self.client.header.request_id);
+            }
+
             SERVER_RESPONSE_TIME_SECONDS
                 .with(&labels)
                 .observe(time_to_response as f64 / 1000.0);
