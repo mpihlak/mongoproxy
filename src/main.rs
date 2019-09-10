@@ -143,22 +143,34 @@ pub fn start_metrics_listener(endpoint: &str) {
 // easily able to track connections that have already been established.
 //
 fn handle_connection(server_addr: String, mut client_stream: TcpStream) -> std::io::Result<()> {
-    info!("connecting to server: {}", server_addr);
-    let mut server_stream = TcpStream::connect(&server_addr.parse().unwrap())?;
-
     let client_addr = client_stream.peer_addr().unwrap().to_string();
-
     let mut done = false;
-
     let mut tracker = MongoStatsTracker::new(&client_addr);
 
     const CLIENT: Token = Token(1);
     const SERVER: Token = Token(2);
 
     let poll = Poll::new().unwrap();
-    poll.register(&server_stream, SERVER, Ready::readable(), PollOpt::edge()).unwrap();
-    poll.register(&client_stream, CLIENT, Ready::readable(), PollOpt::edge()).unwrap();
     let mut events = Events::with_capacity(1024);
+
+    info!("connecting to server: {}", server_addr);
+    let mut server_stream = TcpStream::connect(&server_addr.parse().unwrap())?;
+    poll.register(&server_stream, SERVER, Ready::all(), PollOpt::edge()).unwrap();
+
+    debug!("Waiting server connection to become ready.");
+    'outer: loop {
+        poll.poll(&mut events, None).unwrap();
+        for event in events.iter() {
+            if let SERVER = event.token() {
+                if event.readiness().is_writable() {
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    poll.register(&client_stream, CLIENT, Ready::readable() | Ready::writable(),
+        PollOpt::edge()).unwrap();
 
     while !done {
         debug!("Polling");
