@@ -1,16 +1,13 @@
 version: "3"
 services:
-  envoy:
-    container_name: envoy
-    image: envoyproxy/envoy-dev
-    ports:
-      - "8001:8001"
-      - "27018:27018"
-    volumes:
-      - ./log:/var/log
-      - ./envoy.yaml:/etc/envoy/envoy.yaml
-    links:
-      - mongodb
+  #  envoy:
+  #  container_name: mongoproxy
+  #  image: mongoproxy:latest
+  #  ports:
+  #    - "9898:9898"
+  #    - "27111:27111"
+  #  links:
+  #    - mongodb
   mongodb:
     container_name: mongo
     image: mongo
