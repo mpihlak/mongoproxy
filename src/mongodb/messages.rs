@@ -182,12 +182,15 @@ pub struct MsgOpQuery {
     pub full_collection_name: String,
     number_to_skip: i32,
     number_to_return: i32,
+    pub query: bson::Document,
+    // There's also optional "returnFieldsSelector" but we ignore it
 }
 
 impl fmt::Display for MsgOpQuery {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}",
-               self.flags, self.full_collection_name, self.number_to_skip, self.number_to_return)
+        write!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}\n",
+               self.flags, self.full_collection_name, self.number_to_skip, self.number_to_return)?;
+        write!(f, "query: {}", self.query)
     }
 }
 
@@ -197,7 +200,11 @@ impl MsgOpQuery {
         let full_collection_name = read_c_string(&mut rdr)?;
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
         let number_to_return = rdr.read_i32::<LittleEndian>()?;
-        Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return})
+        let query = match decode_document(&mut rdr) {
+            Ok(doc) => doc,
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        };
+        Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return, query})
     }
 }
 

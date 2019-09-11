@@ -23,7 +23,7 @@ lazy_static! {
         register_histogram_vec!(
             "server_response_time_seconds",
             "Backend response latency",
-            &["client", "op", "collection", "db"]).unwrap();
+            &["client", "app_name", "op", "collection", "db"]).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -43,6 +43,7 @@ pub struct MongoStatsTracker {
     server:                 MongoProtocolParser,
     client_addr:            String,
     client_request_time:    Instant,
+    client_application:     String,
     client_message:         MongoMessage,
 }
 
@@ -53,6 +54,7 @@ impl MongoStatsTracker{
             server: MongoProtocolParser::new(),
             client_addr: client_addr.clone(),
             client_request_time: Instant::now(),
+            client_application: String::from(""),
             client_message: MongoMessage::None,
         }
     }
@@ -69,6 +71,25 @@ impl MongoStatsTracker{
             info!("client: hdr: {}", self.client.header);
             info!("client: msg: {}", self.client_message);
             self.client_request_time = Instant::now();
+
+            // For isMaster requests we  make an attempt to obtain connection metadata
+            // from the payload. This will be sent on the first isMaster request and
+            // contains a document such as this:
+            // { isMaster: 1, client: { application: { name: "kala" },
+            //   driver: { name: "MongoDB Internal Client", version: "4.0.2" },
+            //   os: { type: "Darwin", name: "Mac OS X", architecture: "x86_64", version: "18.7.0" } } }
+            if let MongoMessage::Query(m) = &self.client_message {
+                if m.query.contains_key("isMaster") {
+                    if let Some(bson::Bson::Document(client)) = m.query.get("client") {
+                        if let Some(bson::Bson::Document(application)) = client.get("application") {
+                            if let Ok(name) = application.get_str("name") {
+                                self.client_application = String::from(name);
+                                info!("my app_name={}", self.client_application);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -94,6 +115,7 @@ impl MongoStatsTracker{
                     self.server.header.response_to, self.client.header.request_id);
             }
 
+            labels.insert("app_name", &self.client_application);
             SERVER_RESPONSE_TIME_SECONDS
                 .with(&labels)
                 .observe(time_to_response as f64 / 1000.0);
