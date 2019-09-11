@@ -78,8 +78,10 @@ impl MongoStatsTracker{
             // { isMaster: 1, client: { application: { name: "kala" },
             //   driver: { name: "MongoDB Internal Client", version: "4.0.2" },
             //   os: { type: "Darwin", name: "Mac OS X", architecture: "x86_64", version: "18.7.0" } } }
+            // But sometimes it's called "ismaster" (mongoose) instead of "isMaster" so we need to
+            // handle that as well.
             if let MongoMessage::Query(m) = &self.client_message {
-                if m.query.contains_key("isMaster") {
+                if m.query.contains_key("isMaster") || m.query.contains_key("ismaster") {
                     if let Some(bson::Bson::Document(client)) = m.query.get("client") {
                         if let Some(bson::Bson::Document(application)) = client.get("application") {
                             if let Ok(name) = application.get_str("name") {
