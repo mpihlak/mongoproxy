@@ -23,6 +23,11 @@ lazy_static! {
             "Header parse errors",
             &["error"]).unwrap();
 
+    static ref MESSAGE_PARSE_ERRORS_COUNTER: CounterVec =
+        register_counter_vec!(
+            "message_parse_error_count_total",
+            "Message body parse errors",
+            &["error"]).unwrap();
 }
 
 pub struct MongoProtocolParser {
@@ -95,6 +100,7 @@ impl MongoProtocolParser {
                     },
                     Err(e) => {
                         error!("Error extracting message: {}", e);
+                        MESSAGE_PARSE_ERRORS_COUNTER.with_label_values(&[&e.to_string()]).inc();
                         self.parser_active = false;
                         return None;
                     }
