@@ -63,7 +63,7 @@ impl MongoProtocolParser {
     // we try to read message length worth of bytes and parse the message. Once
     // the message is parsed we expect a header again and the process repeats.
     //
-    pub fn parse_buffer(&mut self, buf: &Vec<u8>) -> Option<MongoMessage> {
+    pub fn parse_buffer(&mut self, buf: &[u8]) -> Option<MongoMessage> {
         if !self.parser_active {
             return None;
         }
@@ -158,7 +158,7 @@ fn extract_message(op_code: u32, mut rdr: impl Read) -> io::Result<MongoMessage>
             warn!("Unhandled OP: {}", op_code);
         },
     }
-    return Ok(MongoMessage::None);
+    Ok(MongoMessage::None)
 }
 
 #[cfg(test)]

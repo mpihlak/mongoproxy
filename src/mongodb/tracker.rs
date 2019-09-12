@@ -48,18 +48,18 @@ pub struct MongoStatsTracker {
 }
 
 impl MongoStatsTracker{
-    pub fn new(client_addr: &String) -> Self {
+    pub fn new(client_addr: &str) -> Self {
         MongoStatsTracker {
             client: MongoProtocolParser::new(),
             server: MongoProtocolParser::new(),
-            client_addr: client_addr.clone(),
+            client_addr: client_addr.to_string(),
             client_request_time: Instant::now(),
             client_application: String::from(""),
             client_message: MongoMessage::None,
         }
     }
 
-    pub fn track_client_request(&mut self, buf: &Vec<u8>) {
+    pub fn track_client_request(&mut self, buf: &[u8]) {
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
@@ -86,7 +86,6 @@ impl MongoStatsTracker{
                         if let Some(bson::Bson::Document(application)) = client.get("application") {
                             if let Ok(name) = application.get_str("name") {
                                 self.client_application = String::from(name);
-                                info!("my app_name={}", self.client_application);
                             }
                         }
                     }
@@ -95,13 +94,13 @@ impl MongoStatsTracker{
         }
     }
 
-    pub fn track_server_response(&mut self, buf: &Vec<u8>) {
+    pub fn track_server_response(&mut self, buf: &[u8]) {
         SERVER_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for msg in self.server.parse_buffer(buf) {
+        if let Some(msg) = self.server.parse_buffer(buf) {
             if let MongoMessage::None = msg {
-                continue;
+                return;
             }
 
             info!("server: hdr: {}", self.server.header);
@@ -188,7 +187,7 @@ impl MongoStatsTracker{
 fn add_collection_labels<'a>(
         labels: &mut HashMap<&'a str, &'a str>,
         op_name: &'a str,
-        full_collection_name: &'a String) {
+        full_collection_name: &'a str) {
     labels.insert("op", op_name);
     if let Some(pos) = full_collection_name.find('.') {
         let (db, collection) = full_collection_name.split_at(pos);

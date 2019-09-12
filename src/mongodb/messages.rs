@@ -34,7 +34,7 @@ pub enum MongoMessage {
 
 impl fmt::Display for MongoMessage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        return match self {
+        match self {
             // TODO: Surely this can be handled more elegantly, perhaps with trait impl
             MongoMessage::Msg(m) => m.fmt(f),
             MongoMessage::Query(m) => m.fmt(f),
@@ -98,10 +98,9 @@ pub struct MsgOpMsg {
 
 impl fmt::Display for MsgOpMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_MSG flags: {}\n",
-               self.flag_bits)?;
+        writeln!(f, "OP_MSG flags: {}", self.flag_bits)?;
         for (i, v)  in self.sections.iter().enumerate() {
-            write!(f, "section {}: {}\n", i, v)?;
+            writeln!(f, "section {}: {}", i, v)?;
         }
         Ok(())
     }
@@ -167,7 +166,7 @@ impl MsgOpMsg {
 
             writer.write_u8(1)?;    // "kind" byte
             writer.write_u32::<LittleEndian>(seq_len as u32)?;
-            writer.write(seq_id.as_bytes())?;
+            writer.write_all(seq_id.as_bytes())?;
             writer.write_u8(0)?;    // terminator for the cstring
             writer.write_all(&buf[..])?;
         }
@@ -188,9 +187,9 @@ pub struct MsgOpQuery {
 
 impl fmt::Display for MsgOpQuery {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}\n",
+        writeln!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}",
                self.flags, self.full_collection_name, self.number_to_skip, self.number_to_return)?;
-        write!(f, "query: {}", self.query)
+        writeln!(f, "query: {}", self.query)
     }
 }
 
@@ -300,10 +299,10 @@ pub struct MsgOpReply {
 
 impl fmt::Display for MsgOpReply {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_REPLY flags: {}, cursor_id: {}, starting_from: {}, number_returned: {}\n",
+        writeln!(f, "OP_REPLY flags: {}, cursor_id: {}, starting_from: {}, number_returned: {}",
                self.flags, self.cursor_id, self.starting_from, self.number_returned)?;
         for (i, v)  in self.documents.iter().enumerate() {
-            write!(f, "document {}: {}\n", i, v)?;
+            writeln!(f, "document {}: {}", i, v)?;
         }
         Ok(())
     }

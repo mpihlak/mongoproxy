@@ -83,7 +83,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let peer_addr = stream.peer_addr().unwrap().clone();
+                let peer_addr = stream.peer_addr().unwrap();
                 let server_addr = server_addr.clone();
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&peer_addr.to_string()]).inc();
 
