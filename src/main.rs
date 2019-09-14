@@ -1,6 +1,6 @@
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
-use std::net::{TcpListener};
+use std::net::{TcpListener,SocketAddr,ToSocketAddrs};
 use std::io::{self, Read, Write};
 use std::{thread, str};
 use log::{info,warn,debug};
@@ -89,7 +89,7 @@ fn main() {
 
                 thread::spawn(move || {
                     info!("new connection from {}", peer_addr);
-                    match handle_connection(server_addr, TcpStream::from_stream(stream).unwrap()) {
+                    match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap()) {
                         Ok(_) => info!("{} closing connection.", peer_addr),
                         Err(e) => {
                             warn!("{} connection error: {}", peer_addr, e);
@@ -142,8 +142,10 @@ pub fn start_metrics_listener(endpoint: &str) {
 // The difficulty there would be reassembling the stream, and we wouldn't
 // easily able to track connections that have already been established.
 //
-fn handle_connection(server_addr: String, mut client_stream: TcpStream) -> std::io::Result<()> {
-    let client_addr = client_stream.peer_addr().unwrap().to_string();
+fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io::Result<()> {
+    let _peer_addr = client_stream.peer_addr()?.to_string();
+    let client_addr = _peer_addr.split(":").next().unwrap_or(&_peer_addr);
+
     let mut done = false;
     let mut tracker = MongoStatsTracker::new(&client_addr);
 
@@ -154,7 +156,8 @@ fn handle_connection(server_addr: String, mut client_stream: TcpStream) -> std::
     let mut events = Events::with_capacity(1024);
 
     info!("connecting to server: {}", server_addr);
-    let mut server_stream = TcpStream::connect(&server_addr.parse().unwrap())?;
+    let server_addr = lookup_address(server_addr)?;
+    let mut server_stream = TcpStream::connect(&server_addr)?;
     poll.register(&server_stream, SERVER, Ready::all(), PollOpt::edge()).unwrap();
 
     debug!("Waiting server connection to become ready.");
@@ -208,6 +211,14 @@ fn handle_connection(server_addr: String, mut client_stream: TcpStream) -> std::
     }
 
     Ok(())
+}
+
+fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
+    for sockaddr in addr.to_socket_addrs()? {
+        debug!("{} resolves to {}", addr, sockaddr);
+        return Ok(sockaddr);
+    }
+    Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "no usable address found"))
 }
 
 // Copy bytes from one stream to another. Collect the processed bytes
