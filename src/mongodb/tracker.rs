@@ -9,31 +9,31 @@ use prometheus::{Counter, CounterVec, HistogramVec};
 lazy_static! {
     static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
         register_counter_vec!(
-            "unsupported_op_name_count_total",
+            "mongoproxy_unsupported_op_name_count_total",
             "Number of unrecognized op names in MongoDb response",
             &["op_name"]).unwrap();
 
     static ref RESPONSE_TO_REQUEST_MISMATCH: Counter =
         register_counter!(
-            "response_to_request_id_mismatch",
+            "mongoproxy_response_to_request_id_mismatch",
             "Number of occurrences where we don't have a matching client request for the response"
             ).unwrap();
 
     static ref SERVER_RESPONSE_TIME_SECONDS: HistogramVec =
         register_histogram_vec!(
-            "server_response_time_seconds",
+            "mongoproxy_server_response_time_seconds",
             "Backend response latency",
             &["client", "app_name", "op", "collection", "db"]).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
-            "client_bytes_sent_total",
+            "mongoproxy_client_bytes_sent_total",
             "Total number of bytes sent by the client",
             &["client"]).unwrap();
 
     static ref SERVER_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
-            "sever_bytes_sent_total",
+            "mongoproxy_server_bytes_sent_total",
             "Total number of bytes sent by the server",
             &["client"]).unwrap();
 }

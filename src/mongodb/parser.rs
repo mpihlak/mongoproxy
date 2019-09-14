@@ -7,25 +7,25 @@ use prometheus::{CounterVec};
 lazy_static! {
     static ref OPCODE_COUNTER: CounterVec =
         register_counter_vec!(
-            "opcode_count_total",
+            "mongoproxy_opcode_count_total",
             "Number of different opcodes encountered",
             &["op_code"]).unwrap();
 
     static ref UNSUPPORTED_OPCODE_COUNTER: CounterVec =
         register_counter_vec!(
-            "unsupported_op_code_count_total",
+            "mongoproxy_unsupported_op_code_count_total",
             "Number of unrecognized opcodes in MongoDb header",
             &["op_code"]).unwrap();
 
     static ref HEADER_PARSE_ERRORS_COUNTER: CounterVec =
         register_counter_vec!(
-            "header_parse_error_count_total",
+            "mongoproxy_header_parse_error_count_total",
             "Header parse errors",
             &["error"]).unwrap();
 
     static ref MESSAGE_PARSE_ERRORS_COUNTER: CounterVec =
         register_counter_vec!(
-            "message_parse_error_count_total",
+            "mongoproxy_message_parse_error_count_total",
             "Message body parse errors",
             &["error"]).unwrap();
 }

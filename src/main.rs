@@ -26,13 +26,13 @@ const METRICS_ADDR: &str = "0.0.0.0:9898";
 lazy_static! {
     static ref CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
-            "client_connections_established_total",
+            "mongoproxy_client_connections_established_total",
             "Total number of client connections established",
             &["client"]).unwrap();
 
     static ref CONNECTION_ERRORS_TOTAL: Counter =
         register_counter!(
-            "client_connection_errors_total",
+            "mongoproxy_client_connection_errors_total",
             "Total number of errors from handle_connections").unwrap();
 }
 
