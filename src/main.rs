@@ -4,7 +4,7 @@ use std::net::{TcpListener,SocketAddr,ToSocketAddrs};
 use std::io::{self, Read, Write};
 use std::{thread, str};
 use log::{info,warn,debug};
-use prometheus::{CounterVec,Counter,Encoder,TextEncoder};
+use prometheus::{CounterVec,Counter,HistogramVec,Encoder,TextEncoder};
 use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
 use clap::{Arg, App};
 
@@ -34,6 +34,13 @@ lazy_static! {
         register_counter!(
             "mongoproxy_client_connection_errors_total",
             "Total number of errors from handle_connections").unwrap();
+
+    static ref SERVER_CONNECT_TIME_SECONDS: HistogramVec =
+        register_histogram_vec!(
+            "mongoproxy_server_connect_time_seconds",
+            "Time it takes to look up and connect to a server",
+            &["server_addr"]).unwrap();
+
 }
 
 fn main() {
@@ -156,6 +163,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
     let mut events = Events::with_capacity(1024);
 
     info!("connecting to server: {}", server_addr);
+    let timer = SERVER_CONNECT_TIME_SECONDS.with_label_values(&[server_addr]).start_timer();
     let server_addr = lookup_address(server_addr)?;
     let mut server_stream = TcpStream::connect(&server_addr)?;
     poll.register(&server_stream, SERVER, Ready::all(), PollOpt::edge()).unwrap();
@@ -171,6 +179,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
             }
         }
     }
+    timer.observe_duration();
 
     poll.register(&client_stream, CLIENT, Ready::readable() | Ready::writable(),
         PollOpt::edge()).unwrap();
