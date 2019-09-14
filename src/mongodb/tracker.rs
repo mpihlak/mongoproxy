@@ -31,9 +31,9 @@ lazy_static! {
             "Total number of bytes sent by the client",
             &["client"]).unwrap();
 
-    static ref SERVER_BYTES_SENT_TOTAL: CounterVec =
+    static ref CLIENT_BYTES_RECV_TOTAL: CounterVec =
         register_counter_vec!(
-            "mongoproxy_server_bytes_sent_total",
+            "mongoproxy_client_bytes_received_total",
             "Total number of bytes sent by the server",
             &["client"]).unwrap();
 }
@@ -95,7 +95,7 @@ impl MongoStatsTracker{
     }
 
     pub fn track_server_response(&mut self, buf: &[u8]) {
-        SERVER_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
+        CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
         if let Some(msg) = self.server.parse_buffer(buf) {
