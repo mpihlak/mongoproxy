@@ -2,7 +2,7 @@ use super::messages::{MongoMessage};
 use super::parser::MongoProtocolParser;
 use std::time::{Instant};
 use std::collections::{HashMap, HashSet};
-use log::{info,warn};
+use log::{debug,info,warn};
 use prometheus::{Counter, CounterVec, HistogramVec};
 
 
@@ -23,7 +23,25 @@ lazy_static! {
         register_histogram_vec!(
             "mongoproxy_server_response_time_seconds",
             "Backend response latency",
-            &["client", "app_name", "op", "collection", "db"]).unwrap();
+            &["client", "app", "op", "collection", "db"]).unwrap();
+
+    static ref DOCUMENTS_RETURNED_TOTAL: HistogramVec =
+        register_histogram_vec!(
+            "mongoproxy_documents_returned_total",
+            "Number of documents returned in the response",
+            &["client", "app", "op", "collection", "db"]).unwrap();
+
+    static ref DOCUMENTS_CHANGED_TOTAL: HistogramVec =
+        register_histogram_vec!(
+            "mongoproxy_documents_changed_total",
+            "Number of documents matched by insert, update or delete operations",
+            &["client", "app", "op", "collection", "db"]).unwrap();
+
+    static ref SERVER_RESPONSE_SIZE_TOTAL: HistogramVec =
+        register_histogram_vec!(
+            "mongoproxy_server_response_bytes_total",
+            "Size of the server response",
+            &["client", "app", "op", "collection", "db"]).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -106,7 +124,7 @@ impl MongoStatsTracker{
             info!("server: hdr: {}", self.server.header);
             info!("server: msg: {}", msg);
 
-            let mut labels = self.extract_labels();
+            let mut labels = self.extract_client_labels();
             let time_to_response = self.client_request_time.elapsed().as_millis();
             labels.insert("client", self.client_addr.as_str());
 
@@ -116,14 +134,52 @@ impl MongoStatsTracker{
                     self.server.header.response_to, self.client.header.request_id);
             }
 
-            labels.insert("app_name", &self.client_application);
+            labels.insert("app", &self.client_application);
             SERVER_RESPONSE_TIME_SECONDS
                 .with(&labels)
                 .observe(time_to_response as f64 / 1000.0);
+            SERVER_RESPONSE_SIZE_TOTAL
+                .with(&labels)
+                .observe(self.server.header.message_length as f64);
+
+            // Look into the server response and try to exract some counters from it.
+            // Things like number of documents returned, inserted, updated, deleted.
+            // TODO: For completeness we also need to look into OP_QUERY, OP_INSERT etc.
+            if let MongoMessage::Msg(m) = msg {
+                for section in m.sections {
+                    // Calculate number of documents returned from cursor response
+                    if let Ok(cursor) = section.get_document("cursor") {
+                        let mut batch_found = false;
+                        for key in ["firstBatch", "nextBatch"].iter() {
+                            if let Ok(batch) = cursor.get_array(key) {
+                                debug!("documents returned={}", batch.len());
+                                DOCUMENTS_RETURNED_TOTAL
+                                    .with(&labels)
+                                    .observe(batch.len() as f64);
+                                batch_found = true;
+                                break;
+                            }
+                        }
+                        if !batch_found {
+                            warn!("did not find a batch in the response cursor");
+                        }
+                    } else if section.contains_key("n") && section.contains_key("ok") {
+                        // This should happen in response to insert,update,delete but
+                        // don't bother to check.
+                        // TODO: for update ops we also need to check nModified, "n" is not enough
+                        // TODO: check for "writeErrors" array in the response
+                        let num_rows = section.get_i32("n").unwrap_or(0);
+                        DOCUMENTS_CHANGED_TOTAL
+                            .with(&labels)
+                            .observe(f64::from(num_rows.abs()));
+                    }
+                }
+            }
         }
     }
 
-    pub fn extract_labels(&self) -> HashMap<&str, &str> {
+    // Extract metric labels from the client message.
+    pub fn extract_client_labels(&self) -> HashMap<&str, &str> {
         let mut result = HashMap::new();
 
         // Put in some defaults, so that we dont crash on metrics
