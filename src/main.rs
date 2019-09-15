@@ -191,27 +191,26 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
         for event in events.iter() {
             match event.token() {
                 CLIENT => {
-                    let mut data_from_client = Vec::new();
-
                     debug!("Reading from client");
-                    if !copy_stream(&mut client_stream, &mut server_stream, &mut data_from_client)? {
+                    let mut track_client = |buf: &[u8]| {
+                        tracker.track_client_request(buf);
+                    };
+
+                    if !copy_stream_with_fn(&mut client_stream, &mut server_stream, &mut track_client)? {
                         info!("{} client EOF", client_stream.peer_addr()?);
                         done = true;
                     }
-                    debug!("Read {} bytes from client", data_from_client.len());
-
-                    tracker.track_client_request(&data_from_client);
                 },
                 SERVER => {
-                    let mut data_from_server = Vec::new();
-
                     debug!("Reading from server");
-                    if !copy_stream(&mut server_stream, &mut client_stream, &mut data_from_server)? {
+                    let mut track_server = |buf: &[u8]| {
+                        tracker.track_server_response(buf);
+                    };
+
+                    if !copy_stream_with_fn(&mut server_stream, &mut client_stream, &mut track_server)? {
                         info!("{} server EOF", server_stream.peer_addr()?);
                         done = true;
                     }
-                    debug!("Read {} bytes from server", data_from_server.len());
-                    tracker.track_server_response(&data_from_server);
                 },
                 _ => {}
             }
@@ -219,6 +218,35 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
     }
 
     Ok(())
+}
+
+// Copy bytes from one stream to another, passing the read bytes to a callback.
+// Consumes all input until read would block. Assumes that we are always ready
+// to send bytes.
+//
+// Returns false if EOF reached on the from_stream.
+fn copy_stream_with_fn(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
+        process_bytes: &mut dyn FnMut(&[u8])) -> std::io::Result<bool> {
+
+    let mut buf = [0; 64];
+
+    loop {
+        match from_stream.read(&mut buf) {
+            Ok(0) => {
+                return Ok(false);   // EOF
+            }
+            Ok(len) => {
+                to_stream.write_all(&buf[0..len])?;
+                process_bytes(&buf[0..len]);
+            },
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                return Ok(true)
+            },
+            Err(e) => {
+                return Err(e);
+            },
+        }
+    }
 }
 
 fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
@@ -236,36 +264,4 @@ fn format_client_address(sockaddr: &SocketAddr) -> String {
         addr_str.split_off(pos);
     }
     addr_str
-}
-
-// Copy bytes from one stream to another. Collect the processed bytes
-// to "output_buf" for further processing.
-//
-// TODO: Use a user supplied buffer, so that we're no unnecessarily allocating
-// and copying bytes around.
-//
-// Return false on EOF
-//
-fn copy_stream(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
-               output_buf: &mut Vec<u8>) -> std::io::Result<bool> {
-    let mut buf = [0; 64];
-
-    loop {
-        match from_stream.read(&mut buf) {
-            Ok(len) => {
-                if len > 0 {
-                    to_stream.write_all(&buf[0..len])?;
-                    output_buf.extend_from_slice(&buf[0..len]);
-                } else {
-                    return Ok(false);
-                }
-            },
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                return Ok(true);
-            },
-            Err(e) => {
-                return Err(e);
-            },
-        }
-    }
 }

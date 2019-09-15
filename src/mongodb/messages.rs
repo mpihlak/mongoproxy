@@ -35,7 +35,6 @@ pub enum MongoMessage {
 impl fmt::Display for MongoMessage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            // TODO: Surely this can be handled more elegantly, perhaps with trait impl
             MongoMessage::Msg(m) => m.fmt(f),
             MongoMessage::Query(m) => m.fmt(f),
             MongoMessage::Reply(m) => m.fmt(f),
