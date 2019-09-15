@@ -86,8 +86,8 @@ impl MongoStatsTracker{
                 return;
             }
             self.client_message = msg;
-            info!("client: hdr: {}", self.client.header);
-            info!("client: msg: {}", self.client_message);
+            info!("{} client: hdr: {}", self.client_addr, self.client.header);
+            info!("{} client: msg: {}", self.client_addr, self.client_message);
             self.client_request_time = Instant::now();
 
             // For isMaster requests we  make an attempt to obtain connection metadata
@@ -121,8 +121,8 @@ impl MongoStatsTracker{
                 return;
             }
 
-            info!("server: hdr: {}", self.server.header);
-            info!("server: msg: {}", msg);
+            info!("{} server: hdr: {}", self.client_addr, self.server.header);
+            info!("{} server: msg: {}", self.client_addr, msg);
 
             let mut labels = self.extract_client_labels();
             let time_to_response = self.client_request_time.elapsed().as_millis();
