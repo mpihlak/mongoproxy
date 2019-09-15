@@ -90,16 +90,16 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let peer_addr = stream.peer_addr().unwrap();
+                let client_addr = format_client_address(&stream.peer_addr().unwrap());
                 let server_addr = server_addr.clone();
-                CONNECTION_COUNT_TOTAL.with_label_values(&[&peer_addr.to_string()]).inc();
+                CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
                 thread::spawn(move || {
-                    info!("new connection from {}", peer_addr);
+                    info!("new connection from {}", client_addr);
                     match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap()) {
-                        Ok(_) => info!("{} closing connection.", peer_addr),
+                        Ok(_) => info!("{} closing connection.", client_addr),
                         Err(e) => {
-                            warn!("{} connection error: {}", peer_addr, e);
+                            warn!("{} connection error: {}", client_addr, e);
                             CONNECTION_ERRORS_TOTAL.inc();
                         },
                     };
@@ -150,8 +150,7 @@ pub fn start_metrics_listener(endpoint: &str) {
 // easily able to track connections that have already been established.
 //
 fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io::Result<()> {
-    let _peer_addr = client_stream.peer_addr()?.to_string();
-    let client_addr = _peer_addr.split(':').next().unwrap_or(&_peer_addr);
+    let client_addr = format_client_address(&client_stream.peer_addr()?);
 
     let mut done = false;
     let mut tracker = MongoStatsTracker::new(&client_addr);
@@ -228,6 +227,15 @@ fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
         return Ok(sockaddr);
     }
     Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "no usable address found"))
+}
+
+// Return the peer address of the stream without the :port
+fn format_client_address(sockaddr: &SocketAddr) -> String {
+    let mut addr_str = sockaddr.to_string();
+    if let Some(pos) = addr_str.find(':') {
+        addr_str.split_off(pos);
+    }
+    addr_str
 }
 
 // Copy bytes from one stream to another. Collect the processed bytes
