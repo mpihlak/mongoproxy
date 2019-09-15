@@ -151,7 +151,7 @@ pub fn start_metrics_listener(endpoint: &str) {
 //
 fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io::Result<()> {
     let _peer_addr = client_stream.peer_addr()?.to_string();
-    let client_addr = _peer_addr.split(":").next().unwrap_or(&_peer_addr);
+    let client_addr = _peer_addr.split(':').next().unwrap_or(&_peer_addr);
 
     let mut done = false;
     let mut tracker = MongoStatsTracker::new(&client_addr);
@@ -223,7 +223,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
 }
 
 fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
-    for sockaddr in addr.to_socket_addrs()? {
+    if let Some(sockaddr) = addr.to_socket_addrs()?.next() {
         debug!("{} resolves to {}", addr, sockaddr);
         return Ok(sockaddr);
     }
