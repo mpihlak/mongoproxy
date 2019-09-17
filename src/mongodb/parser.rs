@@ -73,8 +73,9 @@ impl MongoProtocolParser {
         let mut result = MongoMessage::None;
         let mut loop_counter = 0;
         while self.want_bytes > 0 && self.message_buf.len() >= self.want_bytes && loop_counter < 2 {
-            // Make a note of how many bytes we got as we're going to
-            // overwrite it later.
+            // Since we entered the loop we have at least either the header or the message.
+            // Make a note of the position where the next packet starts and consume the bytes
+            // that we wanted.
             let new_buffer_start = self.want_bytes;
 
             if !self.have_header {
@@ -112,7 +113,10 @@ impl MongoProtocolParser {
             }
 
             // Point the message_buf to the bytes that we haven't yet processed
-            // And don't worry about performance, yet
+            // And don't worry about performance, yet.
+            //
+            // TODO: Instead of allocating a new Vec here, we should use a slice to
+            // work on parts of the Vec.
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
             debug!("loop {}: {} bytes in buffer, want {}", loop_counter, self.message_buf.len(), self.want_bytes);
             loop_counter += 1;
