@@ -9,13 +9,13 @@ lazy_static! {
         register_counter_vec!(
             "mongoproxy_opcode_count_total",
             "Number of different opcodes encountered",
-            &["op_code"]).unwrap();
+            &["op"]).unwrap();
 
     static ref UNSUPPORTED_OPCODE_COUNTER: CounterVec =
         register_counter_vec!(
             "mongoproxy_unsupported_op_code_count_total",
             "Number of unrecognized opcodes in MongoDb header",
-            &["op_code"]).unwrap();
+            &["op"]).unwrap();
 
     static ref HEADER_PARSE_ERRORS_COUNTER: CounterVec =
         register_counter_vec!(

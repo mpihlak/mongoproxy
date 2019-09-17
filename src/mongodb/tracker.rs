@@ -11,7 +11,7 @@ lazy_static! {
         register_counter_vec!(
             "mongoproxy_unsupported_op_name_count_total",
             "Number of unrecognized op names in MongoDb response",
-            &["op_name"]).unwrap();
+            &["op"]).unwrap();
 
     static ref RESPONSE_TO_REQUEST_MISMATCH: Counter =
         register_counter!(
@@ -168,6 +168,7 @@ impl MongoStatsTracker{
                         // don't bother to check.
                         // TODO: for update ops we also need to check nModified, "n" is not enough
                         // TODO: check for "writeErrors" array in the response
+                        // TODO: Observation is that this counter doesn't get increased
                         let num_rows = section.get_i32("n").unwrap_or(0);
                         DOCUMENTS_CHANGED_TOTAL
                             .with(&labels)
@@ -188,8 +189,8 @@ impl MongoStatsTracker{
         result.insert("db", "");
 
         let collection_ops: HashSet<&'static str> =
-            ["find", "insert", "delete", "update", "count", "getMore", "aggregate"]
-                .iter().cloned().collect();
+            ["find", "findAndModify", "insert", "delete", "update", "count",
+             "getMore", "aggregate"].iter().cloned().collect();
 
         match &self.client_message {
             MongoMessage::Msg(m) => {

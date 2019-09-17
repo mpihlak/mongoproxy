@@ -90,6 +90,8 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                // The client address may be changed to localhost by various sidecards
+                // such as linkerd. So not as useful, but we keep it anyway.
                 let client_addr = format_client_address(&stream.peer_addr().unwrap());
                 let server_addr = server_addr.clone();
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
