@@ -61,7 +61,7 @@ pub struct MongoStatsTracker {
     client:                 MongoProtocolParser,
     server:                 MongoProtocolParser,
     client_addr:            String,
-    client_request_time:    Instant,
+    client_request_times:   HashMap<u32, Instant>,
     client_application:     String,
     client_message:         MongoMessage,
 }
@@ -72,7 +72,7 @@ impl MongoStatsTracker{
             client: MongoProtocolParser::new(),
             server: MongoProtocolParser::new(),
             client_addr: client_addr.to_string(),
-            client_request_time: Instant::now(),
+            client_request_times: HashMap::new(),
             client_application: String::from(""),
             client_message: MongoMessage::None,
         }
@@ -89,7 +89,10 @@ impl MongoStatsTracker{
             self.client_message = msg;
             info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr,
                 self.client.header, self.client_message);
-            self.client_request_time = Instant::now();
+
+            // We're always removing these entries if we get a server response to
+            // the request. But what if some requests never get a response ...
+            self.client_request_times.insert(self.client.header.request_id, Instant::now());
 
             // For isMaster requests we  make an attempt to obtain connection metadata
             // from the payload. This will be sent on the first isMaster request and
@@ -125,27 +128,30 @@ impl MongoStatsTracker{
             info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr,
                 self.server.header, msg);
 
-            let mut labels = self.extract_client_labels();
-            let time_to_response = self.client_request_time.elapsed().as_millis();
+            let mut labels = extract_client_labels(&self.client_message);
             labels.insert("client", self.client_addr.as_str());
+            labels.insert("app", &self.client_application);
 
-            if self.server.header.response_to != self.client.header.request_id {
+            SERVER_RESPONSE_SIZE_TOTAL
+                .with(&labels)
+                .observe(self.server.header.message_length as f64);
+
+            if let Some(client_request_time) = self.client_request_times.remove(&self.server.header.response_to) {
+                let time_to_response = client_request_time.elapsed().as_millis();
+                SERVER_RESPONSE_TIME_SECONDS
+                    .with(&labels)
+                    .observe(time_to_response as f64 / 1000.0);
+            } else {
                 RESPONSE_TO_REQUEST_MISMATCH.inc();
                 warn!("server response to {}, does not match client request {}",
                     self.server.header.response_to, self.client.header.request_id);
             }
 
-            labels.insert("app", &self.client_application);
-            SERVER_RESPONSE_TIME_SECONDS
-                .with(&labels)
-                .observe(time_to_response as f64 / 1000.0);
-            SERVER_RESPONSE_SIZE_TOTAL
-                .with(&labels)
-                .observe(self.server.header.message_length as f64);
-
             // Look into the server response and try to exract some counters from it.
             // Things like number of documents returned, inserted, updated, deleted.
             // TODO: For completeness we also need to look into OP_QUERY, OP_INSERT etc.
+            //
+            // This should be valid even if we don't know the matching client request
             if let MongoMessage::Msg(m) = msg {
                 for section in m.sections {
                     // Calculate number of documents returned from cursor response
@@ -179,76 +185,76 @@ impl MongoStatsTracker{
             }
         }
     }
+}
 
-    // Extract metric labels from the client message.
-    pub fn extract_client_labels(&self) -> HashMap<&str, &str> {
-        let mut result = HashMap::new();
+// Extract metric labels from the client message.
+pub fn extract_client_labels(client_message: &MongoMessage) -> HashMap<&str, &str> {
+    let mut result = HashMap::new();
 
-        // Put in some defaults, so that we dont crash on metrics
-        result.insert("op", "");
-        result.insert("collection", "");
-        result.insert("db", "");
+    // Put in some defaults, so that we dont crash on metrics
+    result.insert("op", "");
+    result.insert("collection", "");
+    result.insert("db", "");
 
-        let ignore_ops: HashSet<&'static str> =
-            ["isMaster", "ismaster", "whatsmyuri", "buildInfo", "buildinfo",
-            "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
-            "listDatabases", "listIndexes", "listCollections", "replSetGetStatus",
-            "endSessions",
-             ].iter().cloned().collect();
+    let ignore_ops: HashSet<&'static str> =
+        ["isMaster", "ismaster", "whatsmyuri", "buildInfo", "buildinfo",
+        "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
+        "listDatabases", "listIndexes", "listCollections", "replSetGetStatus",
+        "endSessions", "_id", "q",
+            ].iter().cloned().collect();
 
-        let collection_ops: HashSet<&'static str> =
-            ["find", "findAndModify", "insert", "delete", "update", "count",
-             "getMore", "aggregate", "distinct"].iter().cloned().collect();
+    let collection_ops: HashSet<&'static str> =
+        ["find", "findAndModify", "insert", "delete", "update", "count",
+            "getMore", "aggregate", "distinct"].iter().cloned().collect();
 
-        match &self.client_message {
-            MongoMessage::Msg(m) => {
-                // Go and loop through all the sections and see if we find an
-                // operation that we know. This should be the first key of the
-                // doc so we only look at first key of each section.
-                for s in m.sections.iter() {
-                    for elem in s.iter().take(1) {
-                        // Always track the operation, even if we're unable to get any
-                        // additional details for it.
-                        result.insert("op", elem.0.as_str());
+    match client_message {
+        MongoMessage::Msg(m) => {
+            // Go and loop through all the sections and see if we find an
+            // operation that we know. This should be the first key of the
+            // doc so we only look at first key of each section.
+            for s in m.sections.iter() {
+                for elem in s.iter().take(1) {
+                    // Always track the operation, even if we're unable to get any
+                    // additional details for it.
+                    result.insert("op", elem.0.as_str());
 
-                        if collection_ops.contains(elem.0.as_str()) {
-                            if let Some(collection) = elem.1.as_str() {
-                                result.insert("collection", collection);
-                            }
-                        } else if !ignore_ops.contains(elem.0.as_str()) {
-                            // Track all unrecognized ops that we explicitly don't ignore
-                            warn!("unsupported op: {}", elem.0.as_str());
-                            UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&elem.0.as_str()]).inc();
+                    if collection_ops.contains(elem.0.as_str()) {
+                        if let Some(collection) = elem.1.as_str() {
+                            result.insert("collection", collection);
                         }
-                    }
-                    if let Ok(collection) = s.get_str("collection") {
-                        // getMore has collection as an explicit field, support that
-                        result.insert("collection", collection);
-                    }
-                    if let Ok(db) = s.get_str("$db") {
-                        result.insert("db", db);
+                    } else if !ignore_ops.contains(elem.0.as_str()) {
+                        // Track all unrecognized ops that we explicitly don't ignore
+                        warn!("unsupported op: {}", elem.0.as_str());
+                        UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&elem.0.as_str()]).inc();
                     }
                 }
-            },
-            MongoMessage::Query(m) => {
-                add_collection_labels(&mut result, "query", &m.full_collection_name);
-            },
-            MongoMessage::Insert(m) => {
-                add_collection_labels(&mut result, "insert", &m.full_collection_name);
-            },
-            MongoMessage::Update(m) => {
-                add_collection_labels(&mut result, "update", &m.full_collection_name);
-            },
-            MongoMessage::Delete(m) => {
-                add_collection_labels(&mut result, "delete", &m.full_collection_name);
-            },
-            other => {
-                warn!("Labels not implemented for {}", other);
-            },
-        }
-
-        result
+                if let Ok(collection) = s.get_str("collection") {
+                    // getMore has collection as an explicit field, support that
+                    result.insert("collection", collection);
+                }
+                if let Ok(db) = s.get_str("$db") {
+                    result.insert("db", db);
+                }
+            }
+        },
+        MongoMessage::Query(m) => {
+            add_collection_labels(&mut result, "query", &m.full_collection_name);
+        },
+        MongoMessage::Insert(m) => {
+            add_collection_labels(&mut result, "insert", &m.full_collection_name);
+        },
+        MongoMessage::Update(m) => {
+            add_collection_labels(&mut result, "update", &m.full_collection_name);
+        },
+        MongoMessage::Delete(m) => {
+            add_collection_labels(&mut result, "delete", &m.full_collection_name);
+        },
+        other => {
+            warn!("Labels not implemented for {}", other);
+        },
     }
+
+    result
 }
 
 fn add_collection_labels<'a>(
