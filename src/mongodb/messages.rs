@@ -84,7 +84,7 @@ impl MsgHeader {
 
 impl fmt::Display for MsgHeader {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "HDR op: {}, request_id: {}, response_to: {}, length: {}",
+        write!(f, "op: {}, request_id: {}, response_to: {}, length: {}",
         self.op_code, self.request_id, self.response_to, self.message_length)
     }
 }
@@ -107,7 +107,7 @@ impl fmt::Display for MsgOpMsg {
 
 impl MsgOpMsg {
     pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
-        let flag_bits   = rdr.read_u32::<LittleEndian>()?;
+        let flag_bits = rdr.read_u32::<LittleEndian>()?;
         debug!("flag_bits={:04x}", flag_bits);
 
         let mut sections = Vec::new();
