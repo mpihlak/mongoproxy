@@ -76,6 +76,9 @@ fn main() {
     let listen_addr = matches.value_of("listen_addr").unwrap_or(LISTEN_ADDR);
     let metrics_addrs = matches.value_of("metrics_addr").unwrap_or(METRICS_ADDR);
 
+    // TODO: Validate the server address to prevent stupid typos. However
+    // this would also prevent startup on random DNS timeouts.
+
     env_logger::init();
 
     let listener = TcpListener::bind(listen_addr).unwrap();
@@ -171,6 +174,8 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
 
     debug!("Waiting server connection to become ready.");
     'outer: loop {
+        // TODO: This poll could also hang forever in case the server is not responding.
+        // Consider timing out.
         poll.poll(&mut events, None).unwrap();
         for event in events.iter() {
             if let SERVER = event.token() {
