@@ -1,6 +1,7 @@
 use super::messages::{MongoMessage};
 use super::parser::MongoProtocolParser;
 use std::time::{Instant};
+use std::{thread};
 use std::collections::{HashMap, HashSet};
 use log::{debug,info,warn};
 use prometheus::{Counter, CounterVec, HistogramVec};
@@ -86,8 +87,8 @@ impl MongoStatsTracker{
                 return;
             }
             self.client_message = msg;
-            info!("{} client: hdr: {}", self.client_addr, self.client.header);
-            info!("{} client: msg: {}", self.client_addr, self.client_message);
+            info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr,
+                self.client.header, self.client_message);
             self.client_request_time = Instant::now();
 
             // For isMaster requests we  make an attempt to obtain connection metadata
@@ -121,8 +122,8 @@ impl MongoStatsTracker{
                 return;
             }
 
-            info!("{} server: hdr: {}", self.client_addr, self.server.header);
-            info!("{} server: msg: {}", self.client_addr, msg);
+            info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr,
+                self.server.header, msg);
 
             let mut labels = self.extract_client_labels();
             let time_to_response = self.client_request_time.elapsed().as_millis();
@@ -188,9 +189,16 @@ impl MongoStatsTracker{
         result.insert("collection", "");
         result.insert("db", "");
 
+        let ignore_ops: HashSet<&'static str> =
+            ["isMaster", "ismaster", "whatsmyuri", "buildInfo", "buildinfo",
+            "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
+            "listDatabases", "listIndexes", "listCollections", "replSetGetStatus",
+            "endSessions",
+             ].iter().cloned().collect();
+
         let collection_ops: HashSet<&'static str> =
             ["find", "findAndModify", "insert", "delete", "update", "count",
-             "getMore", "aggregate"].iter().cloned().collect();
+             "getMore", "aggregate", "distinct"].iter().cloned().collect();
 
         match &self.client_message {
             MongoMessage::Msg(m) => {
@@ -207,7 +215,9 @@ impl MongoStatsTracker{
                             if let Some(collection) = elem.1.as_str() {
                                 result.insert("collection", collection);
                             }
-                        } else {
+                        } else if !ignore_ops.contains(elem.0.as_str()) {
+                            // Track all unrecognized ops that we explicitly don't ignore
+                            warn!("unsupported op: {}", elem.0.as_str());
                             UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&elem.0.as_str()]).inc();
                         }
                     }
