@@ -1,7 +1,8 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage,OpCode};
 use std::io::{self,Read};
+use std::{thread};
 use log::{debug,warn,error};
-use prometheus::{CounterVec};
+use prometheus::{CounterVec,GaugeVec};
 
 
 lazy_static! {
@@ -28,6 +29,12 @@ lazy_static! {
             "mongoproxy_message_parse_error_count_total",
             "Message body parse errors",
             &["error"]).unwrap();
+
+    static ref THREAD_MESSAGE_BUF_SIZE: GaugeVec =
+        register_gauge_vec!(
+            "mongoproxy_parser_buf_size",
+            "Current size of the parser buffer",
+            &["thread"]).unwrap();
 }
 
 pub struct MongoProtocolParser {
@@ -69,6 +76,9 @@ impl MongoProtocolParser {
         }
 
         self.message_buf.extend(buf);
+        THREAD_MESSAGE_BUF_SIZE
+            .with_label_values(&[&format!("{:?}", thread::current().id())])
+            .set(self.message_buf.len() as f64);
 
         let mut result = MongoMessage::None;
         let mut loop_counter = 0;
