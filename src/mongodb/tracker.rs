@@ -4,7 +4,7 @@ use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
 use log::{debug,info,warn};
-use prometheus::{Counter, CounterVec, HistogramVec};
+use prometheus::{Counter,CounterVec,HistogramVec,GaugeVec};
 
 
 lazy_static! {
@@ -14,16 +14,22 @@ lazy_static! {
             "Number of unrecognized op names in MongoDb response",
             &["op"]).unwrap();
 
+    static ref THREAD_TIMING_HBUF_SIZE: GaugeVec =
+        register_gauge_vec!(
+            "mongoproxy_timing_htab_keys",
+            "Number of current keys in the client timing HashMap",
+            &["thread"]).unwrap();
+
     static ref RESPONSE_TO_REQUEST_MISMATCH: Counter =
         register_counter!(
             "mongoproxy_response_to_request_id_mismatch",
             "Number of occurrences where we don't have a matching client request for the response"
             ).unwrap();
 
-    static ref SERVER_RESPONSE_TIME_SECONDS: HistogramVec =
+    static ref SERVER_RESPONSE_FIRST_BYTE_SECONDS: HistogramVec =
         register_histogram_vec!(
-            "mongoproxy_server_response_time_seconds",
-            "Backend response latency",
+            "mongoproxy_response_first_byte_latency_seconds",
+            "Backend response latency to first byte",
             &["client", "app", "op", "collection", "db"]).unwrap();
 
     static ref DOCUMENTS_RETURNED_TOTAL: HistogramVec =
@@ -136,15 +142,23 @@ impl MongoStatsTracker{
                 .with(&labels)
                 .observe(self.server.header.message_length as f64);
 
+            THREAD_TIMING_HBUF_SIZE
+                .with_label_values(&[&format!("{:?}", thread::current().id())])
+                .set(self.client_request_times.len() as f64);
+
+            // Note that we're only getting time to first byte here, since we immediately
+            // remove the request id from the HashMap. Time to last byte would be more
+            // complicated since we'd have to keep the client request id around until
+            // the cursor is exhausted (though we could detect this by batch length probably)
             if let Some(client_request_time) = self.client_request_times.remove(&self.server.header.response_to) {
                 let time_to_response = client_request_time.elapsed().as_millis();
-                SERVER_RESPONSE_TIME_SECONDS
+                SERVER_RESPONSE_FIRST_BYTE_SECONDS
                     .with(&labels)
                     .observe(time_to_response as f64 / 1000.0);
             } else {
                 RESPONSE_TO_REQUEST_MISMATCH.inc();
-                warn!("server response to {}, does not match client request {}",
-                    self.server.header.response_to, self.client.header.request_id);
+                warn!("client request not found for server response to {}",
+                    self.server.header.response_to);
             }
 
             // Look into the server response and try to exract some counters from it.
@@ -200,12 +214,12 @@ pub fn extract_client_labels(client_message: &MongoMessage) -> HashMap<&str, &st
         ["isMaster", "ismaster", "whatsmyuri", "buildInfo", "buildinfo",
         "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
         "listDatabases", "listIndexes", "listCollections", "replSetGetStatus",
-        "endSessions", "_id", "q",
+        "endSessions", "dropDatabase", "_id", "q",
             ].iter().cloned().collect();
 
     let collection_ops: HashSet<&'static str> =
         ["find", "findAndModify", "insert", "delete", "update", "count",
-            "getMore", "aggregate", "distinct"].iter().cloned().collect();
+        "getMore", "aggregate", "distinct"].iter().cloned().collect();
 
     match client_message {
         MongoMessage::Msg(m) => {
