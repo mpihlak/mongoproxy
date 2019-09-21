@@ -45,7 +45,7 @@ lazy_static! {
 
 fn main() {
     let matches = App::new("mongoproxy")
-        .version("0.1.0")
+        .version("0.1.1")
         .about("Proxies MongoDb requests to obtain metrics")
         .arg(Arg::with_name("server_addr")
             .short("h")
