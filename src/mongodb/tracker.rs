@@ -30,25 +30,32 @@ lazy_static! {
         register_histogram_vec!(
             "mongoproxy_response_first_byte_latency_seconds",
             "Backend response latency to first byte",
-            &["client", "app", "op", "collection", "db"]).unwrap();
+            &["client", "app", "op", "collection", "db"],
+            vec![0.001, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]).unwrap();
 
     static ref DOCUMENTS_RETURNED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_returned_total",
             "Number of documents returned in the response",
-            &["client", "app", "op", "collection", "db"]).unwrap();
+            &["client", "app", "op", "collection", "db"],
+            vec![1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0,
+                 50000.0, 100_000.0, 500_000.0, 1_000_000.0]).unwrap();
 
     static ref DOCUMENTS_CHANGED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_changed_total",
             "Number of documents matched by insert, update or delete operations",
-            &["client", "app", "op", "collection", "db"]).unwrap();
+            &["client", "app", "op", "collection", "db"],
+            vec![1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0,
+                 50000.0, 100_000.0, 500_000.0, 1_000_000.0]).unwrap();
 
     static ref SERVER_RESPONSE_SIZE_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_server_response_bytes_total",
             "Size of the server response",
-            &["client", "app", "op", "collection", "db"]).unwrap();
+            &["client", "app", "op", "collection", "db"],
+            vec![64.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16384.0, 32768.0,
+             65536.0, 131_072.0, 262_144.0, 524_288.0, 1_048_576.0]).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -148,7 +155,7 @@ impl ClientRequest {
     // Parser a fully qualified collection name into "db" and "coll".
     // Both db and coll are expected to be empty before.
     fn parse_collname(full_collection_name: &str, db: &mut String, coll: &mut String) {
-        let pos = full_collection_name.find('.').unwrap_or(full_collection_name.len());
+        let pos = full_collection_name.find('.').unwrap_or_else(|| full_collection_name.len());
         let (_db, _coll) = full_collection_name.split_at(pos);
         db.push_str(_db);
         coll.push_str(_coll);
