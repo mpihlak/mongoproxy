@@ -134,14 +134,16 @@ impl MongoProtocolParser {
             debug!("loop {}: {} bytes in buffer, want {}", loop_counter, self.message_buf.len(), self.want_bytes);
             loop_counter += 1;
 
-            if let Some(_) = result {
+            if result.is_some() {
                 break;
             }
         }
 
         if self.message_buf.len() >= self.want_bytes {
-            // Warn if we could've immediately returned another message
-            warn!("parser: {} surplus bytes in buf and I want {}.",
+            // We have enough bytes to at least start parsing another message.
+            // Not doing that may leave us waiting until the next Poll returns.
+            // TODO: Return a Vec of messages to handle this better.
+            debug!("parser: {} surplus bytes in buf and I want {}.",
                 self.message_buf.len(), self.want_bytes);
         }
 
