@@ -82,6 +82,9 @@ impl MongoProtocolParser {
 
         let mut result = MongoMessage::None;
         let mut loop_counter = 0;
+        // TODO: Instead of checking loop counter, we should check if we have a message.
+        // otherwise we could maybe end up overwriting the self.header with the header from
+        // the next message.
         while self.want_bytes > 0 && self.message_buf.len() >= self.want_bytes && loop_counter < 2 {
             // Since we entered the loop we have at least either the header or the message.
             // Make a note of the position where the next packet starts and consume the bytes
@@ -126,7 +129,7 @@ impl MongoProtocolParser {
             // And don't worry about performance, yet.
             //
             // TODO: Instead of allocating a new Vec here, we should use a slice to
-            // work on parts of the Vec.
+            // work on parts of the Vec. When I feel like taking on the borrow checker.
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
             debug!("loop {}: {} bytes in buffer, want {}", loop_counter, self.message_buf.len(), self.want_bytes);
             loop_counter += 1;
@@ -248,5 +251,76 @@ mod tests {
         assert_eq!(parser.have_message, true);
         assert_eq!(parser.parser_active, true);
         assert_eq!(parser.want_bytes, messages::HEADER_LENGTH);
+    }
+
+    #[test]
+    fn test_parse_msg_sequence() {
+        init();
+
+        let mut msg = MsgOpMsg{ flag_bits: 0, sections: Vec::new() };
+
+        // Craft a MongoDb OP_MSG. Something like: { insert: "kala", $db: "test" }
+        let mut doc = bson::Document::new();
+        doc.insert("insert".to_owned(), bson::Bson::String("foo".to_owned()));
+        msg.sections.push(doc);
+
+        // Write the document to get the encoded length
+        let mut msg_buf = Vec::new();
+        msg.write(&mut msg_buf).unwrap();
+
+        // Now that we know the message length, construct the header and write the
+        // whole message out.
+        let mut buf = Vec::new();
+        let mut hdr = MsgHeader {
+            message_length: messages::HEADER_LENGTH + msg_buf.len(),
+            request_id: 1234,
+            response_to: 5678,
+            op_code: 2013,
+        };
+
+        hdr.write(&mut buf).unwrap();
+        buf.extend(&msg_buf);
+
+        // And do this again, but now change the request id and response to
+        hdr.request_id = 5678;
+        hdr.response_to = 1234;
+        hdr.write(&mut buf).unwrap();
+        buf.extend(&msg_buf);
+
+        let mut parser = MongoProtocolParser::new();
+        match parser.parse_buffer(&buf) {
+            Some(MongoMessage::Msg(m)) => {
+                assert_eq!(m.sections.len(), 1);
+                let doc = &m.sections[0];
+                assert_eq!(doc.get_str("insert").unwrap(), "foo");
+            },
+            other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
+        }
+
+        assert_eq!(parser.have_header, false);
+        assert_eq!(parser.have_message, true);
+        assert_eq!(parser.parser_active, true);
+        assert_eq!(parser.header.request_id, 1234);
+        assert_eq!(parser.header.response_to, 5678);
+        assert_eq!(parser.want_bytes, messages::HEADER_LENGTH);
+
+        // Now, the next call with empty buffer must give us the next message
+        match parser.parse_buffer(&[]) {
+            Some(MongoMessage::Msg(m)) => {
+                assert_eq!(m.sections.len(), 1);
+                let doc = &m.sections[0];
+                assert_eq!(doc.get_str("insert").unwrap(), "foo");
+            },
+            other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
+        }
+
+        // But now we expect a different request/response pair
+        assert_eq!(parser.have_header, false);
+        assert_eq!(parser.have_message, true);
+        assert_eq!(parser.parser_active, true);
+        assert_eq!(parser.header.request_id, 5678);
+        assert_eq!(parser.header.response_to, 1234);
+        assert_eq!(parser.want_bytes, messages::HEADER_LENGTH);
+
     }
 }
