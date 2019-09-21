@@ -124,17 +124,13 @@ impl ClientRequest {
                 op = String::from("query");
                 ClientRequest::parse_collname(&m.full_collection_name, &mut db, &mut coll)
             },
-            MongoMessage::Insert(m) => {
-                op = String::from("insert");
-                ClientRequest::parse_collname(&m.full_collection_name, &mut db, &mut coll)
-            },
-            MongoMessage::Update(m) => {
-                op = String::from("update");
-                ClientRequest::parse_collname(&m.full_collection_name, &mut db, &mut coll)
-            },
-            MongoMessage::Delete(m) => {
-                op = String::from("delete");
-                ClientRequest::parse_collname(&m.full_collection_name, &mut db, &mut coll)
+
+            // There is no response to OP_INSERT, DELETE, UPDATE so don't bother
+            // processing labels for these.
+            MongoMessage::Insert(_) |
+            MongoMessage::Update(_) |
+            MongoMessage::Delete(_) => {
+                warn!("Not processing labels obsolete INSERT,UPDATE or DELETE messages");
             },
             other => {
                 warn!("Labels not implemented for {}", other);
