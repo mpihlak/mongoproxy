@@ -14,6 +14,8 @@ use env_logger;
 extern crate prometheus;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate clap;
 
 mod mongodb;
 
@@ -45,7 +47,7 @@ lazy_static! {
 
 fn main() {
     let matches = App::new("mongoproxy")
-        .version("0.1.1")
+        .version(crate_version!())
         .about("Proxies MongoDb requests to obtain metrics")
         .arg(Arg::with_name("server_addr")
             .short("h")
