@@ -14,10 +14,10 @@ lazy_static! {
             "Number of unrecognized op names in MongoDb response",
             &["op"]).unwrap();
 
-    static ref THREAD_TIMING_HBUF_SIZE: GaugeVec =
+    static ref REQUEST_MATCH_HASHMAP_SIZE: GaugeVec =
         register_gauge_vec!(
-            "mongoproxy_timing_htab_keys",
-            "Number of current keys in the client timing HashMap",
+            "mongoproxy_request_match_hashmap_size",
+            "Number of current keys in the request/response mapping HashMap",
             &["thread"]).unwrap();
 
     static ref RESPONSE_TO_REQUEST_MISMATCH: Counter =
@@ -231,7 +231,7 @@ impl MongoStatsTracker{
             info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr,
                 self.server.header, msg);
 
-            THREAD_TIMING_HBUF_SIZE
+            REQUEST_MATCH_HASHMAP_SIZE
                 .with_label_values(&[&format!("{:?}", thread::current().id())])
                 .set(self.client_request_map.len() as f64);
 
