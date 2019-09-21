@@ -180,10 +180,6 @@ impl MongoStatsTracker{
             .inc_by(buf.len() as f64);
 
         if let Some(msg) = self.client.parse_buffer(buf) {
-            if let MongoMessage::None = msg {
-                return;
-            }
-
             info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr,
                 self.client.header, msg);
 
@@ -208,8 +204,7 @@ impl MongoStatsTracker{
             }
 
             // We're always removing these entries if we get a server response to
-            // the request.
-            // TODO: But what if some requests never get a response ...
+            // the request. TODO: But what if some requests never get a response ...
             let req = ClientRequest::from(msg);
             self.client_request_map.insert(self.client.header.request_id, req);
         }
@@ -224,10 +219,6 @@ impl MongoStatsTracker{
             .inc_by(buf.len() as f64);
 
         if let Some(msg) = self.server.parse_buffer(buf) {
-            if let MongoMessage::None = msg {
-                return;
-            }
-
             info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr,
                 self.server.header, msg);
 
@@ -297,4 +288,3 @@ impl MongoStatsTracker{
         }
     }
 }
-
