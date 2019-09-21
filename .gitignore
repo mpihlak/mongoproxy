@@ -4,3 +4,4 @@ testing/log
 **/*.rs.bk
 TODO.txt
 *.sw[op]
+docker-build.sh
