@@ -138,7 +138,7 @@ impl MongoProtocolParser {
                 self.message_buf.len(), self.want_bytes);
         }
 
-        debug!("result={:?}", result);
+        debug!("buf size={} result={:?}", buf.len(), result);
         Some(result)
     }
 }
