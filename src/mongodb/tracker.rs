@@ -257,41 +257,48 @@ impl MongoStatsTracker{
             .with_label_values(&self.label_values(&client_request))
             .observe(self.server.header.message_length as f64);
 
-        // Look into the server response and try to exract some counters from it.
+        // Look into the server response and exract some counters from it.
         // Things like number of documents returned, inserted, updated, deleted.
-        // TODO: For completeness we also need to look into OP_QUERY, OP_INSERT etc.
-        //
-        // This should be valid even if we don't know the matching client request
-        if let MongoMessage::Msg(m) = msg {
-            for section in m.sections {
-                // Calculate number of documents returned from cursor response
-                if let Ok(cursor) = section.get_document("cursor") {
-                    let mut batch_found = false;
-                    for key in ["firstBatch", "nextBatch"].iter() {
-                        if let Ok(batch) = cursor.get_array(key) {
-                            debug!("documents returned={}", batch.len());
-                            DOCUMENTS_RETURNED_TOTAL
-                                .with_label_values(&self.label_values(&client_request))
-                                .observe(batch.len() as f64);
-                            batch_found = true;
-                            break;
+        // The only interesting messages here are OP_MSG and OP_REPLY.
+        match msg {
+            MongoMessage::Msg(m) => {
+                for section in m.sections {
+                    // Calculate number of documents returned from cursor response
+                    if let Ok(cursor) = section.get_document("cursor") {
+                        let mut batch_found = false;
+                        for key in ["firstBatch", "nextBatch"].iter() {
+                            if let Ok(batch) = cursor.get_array(key) {
+                                debug!("documents returned={}", batch.len());
+                                DOCUMENTS_RETURNED_TOTAL
+                                    .with_label_values(&self.label_values(&client_request))
+                                    .observe(batch.len() as f64);
+                                batch_found = true;
+                                break;
+                            }
                         }
+                        if !batch_found {
+                            warn!("did not find a batch in the response cursor");
+                        }
+                    } else if section.contains_key("n") && client_request.op != "count" {
+                        // This should happen in response to insert,update,delete but
+                        // don't bother to check.
+                        let num_rows = if client_request.op == "update" {
+                            section.get_i32("nModified").unwrap_or(0)
+                        } else {
+                            section.get_i32("n").unwrap_or(0)
+                        };
+                        DOCUMENTS_CHANGED_TOTAL
+                            .with_label_values(&self.label_values(&client_request))
+                            .observe(f64::from(num_rows.abs()));
                     }
-                    if !batch_found {
-                        warn!("did not find a batch in the response cursor");
-                    }
-                } else if section.contains_key("n") && section.contains_key("ok") {
-                    // This should happen in response to insert,update,delete but
-                    // don't bother to check.
-                    // TODO: for update ops we also need to check nModified, "n" is not enough
-                    // TODO: check for "writeErrors" array in the response
-                    // TODO: Observation is that this counter doesn't get increased
-                    let num_rows = section.get_i32("n").unwrap_or(0);
-                    DOCUMENTS_CHANGED_TOTAL
-                        .with_label_values(&self.label_values(&client_request))
-                        .observe(f64::from(num_rows.abs()));
                 }
-            }
+            },
+            MongoMessage::Reply(_) => {
+                warn!("Ingoring legacy OP_REPLY response.");
+            },
+            other => {
+                warn!("Unrecognized message_type: {:?}", other);
+            },
         }
     }
 }
