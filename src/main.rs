@@ -237,7 +237,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
 fn copy_stream_with_fn(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
         process_bytes: &mut dyn FnMut(&[u8])) -> std::io::Result<bool> {
 
-    let mut buf = [0; 64];
+    let mut buf = [0; 1024];
 
     loop {
         match from_stream.read(&mut buf) {
