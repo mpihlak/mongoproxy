@@ -73,8 +73,7 @@ lazy_static! {
         ["isMaster", "ismaster", "whatsmyuri", "buildInfo", "buildinfo",
         "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
         "listDatabases", "listIndexes", "listCollections", "replSetGetStatus",
-        "endSessions", "dropDatabase", "_id", "q",
-            ].iter().cloned().collect();
+        "endSessions", "dropDatabase", "_id", "q"].iter().cloned().collect();
 
     static ref MONGODB_COLLECTION_OPS: HashSet<&'static str> =
         ["find", "findAndModify", "insert", "delete", "update", "count",
@@ -99,9 +98,9 @@ impl ClientRequest {
 
         match msg {
             MongoMessage::Msg(m) => {
-                // Go and loop through all the documents and see if we find an
-                // operation that we know. This should be the first key of the
-                // doc so we only look at first key of each section.
+                // Go and loop through all the documents in the msg and see if we
+                // find an operation that we know. This should be the first key of
+                // the doc so we only look at first key of each section.
                 for s in m.documents.iter() {
                     for elem in s.iter().take(1) {
                         // Always track the operation, even if we're unable to get any
@@ -233,10 +232,6 @@ impl MongoStatsTracker{
                 .with_label_values(&[&format!("{:?}", thread::current().id())])
                 .set(self.client_request_map.len() as f64);
 
-            // Note that we're only getting time to first byte here, since we immediately
-            // remove the request id from the HashMap. Time to last byte would be more
-            // complicated since we'd have to keep the client request id around until
-            // the cursor is exhausted (though we could detect this by batch length probably)
             if let Some(client_request) = self.client_request_map.remove(&self.server.header.response_to) {
                 self.observe_server_response_to(msg, &client_request);
             } else {
