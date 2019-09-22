@@ -68,6 +68,17 @@ lazy_static! {
             "mongoproxy_client_bytes_received_total",
             "Total number of bytes sent by the server",
             &["client"]).unwrap();
+
+    static ref IGNORE_MONGODB_OPS: HashSet<&'static str> =
+        ["isMaster", "ismaster", "whatsmyuri", "buildInfo", "buildinfo",
+        "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
+        "listDatabases", "listIndexes", "listCollections", "replSetGetStatus",
+        "endSessions", "dropDatabase", "_id", "q",
+            ].iter().cloned().collect();
+
+    static ref MONGODB_COLLECTION_OPS: HashSet<&'static str> =
+        ["find", "findAndModify", "insert", "delete", "update", "count",
+        "getMore", "aggregate", "distinct"].iter().cloned().collect();
 }
 
 // Stripped down version of the client request. We need this mostly for timing
@@ -86,17 +97,6 @@ impl ClientRequest {
         let mut db = String::from("");
         let mut coll = String::from("");
 
-        let ignore_ops: HashSet<&'static str> =
-            ["isMaster", "ismaster", "whatsmyuri", "buildInfo", "buildinfo",
-            "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
-            "listDatabases", "listIndexes", "listCollections", "replSetGetStatus",
-            "endSessions", "dropDatabase", "_id", "q",
-                ].iter().cloned().collect();
-
-        let collection_ops: HashSet<&'static str> =
-            ["find", "findAndModify", "insert", "delete", "update", "count",
-            "getMore", "aggregate", "distinct"].iter().cloned().collect();
-
         match msg {
             MongoMessage::Msg(m) => {
                 // Go and loop through all the documents and see if we find an
@@ -108,11 +108,11 @@ impl ClientRequest {
                         // additional details for it.
                         op = elem.0.as_str().to_owned();
 
-                        if collection_ops.contains(elem.0.as_str()) {
+                        if MONGODB_COLLECTION_OPS.contains(elem.0.as_str()) {
                             if let Some(collection) = elem.1.as_str() {
                                 coll = collection.to_owned();
                             }
-                        } else if !ignore_ops.contains(elem.0.as_str()) {
+                        } else if !IGNORE_MONGODB_OPS.contains(elem.0.as_str()) {
                             // Track all unrecognized ops that we explicitly don't ignore
                             warn!("unsupported op: {}", elem.0.as_str());
                             UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&elem.0.as_str()]).inc();
