@@ -99,10 +99,10 @@ impl ClientRequest {
 
         match msg {
             MongoMessage::Msg(m) => {
-                // Go and loop through all the sections and see if we find an
+                // Go and loop through all the documents and see if we find an
                 // operation that we know. This should be the first key of the
                 // doc so we only look at first key of each section.
-                for s in m.sections.iter() {
+                for s in m.documents.iter() {
                     for elem in s.iter().take(1) {
                         // Always track the operation, even if we're unable to get any
                         // additional details for it.
@@ -262,7 +262,7 @@ impl MongoStatsTracker{
         // The only interesting messages here are OP_MSG and OP_REPLY.
         match msg {
             MongoMessage::Msg(m) => {
-                for section in m.sections {
+                for section in m.documents {
                     // Calculate number of documents returned from cursor response
                     if let Ok(cursor) = section.get_document("cursor") {
                         let mut batch_found = false;
@@ -293,8 +293,10 @@ impl MongoStatsTracker{
                     }
                 }
             },
-            MongoMessage::Reply(_) => {
-                warn!("Ingoring legacy OP_REPLY response.");
+            MongoMessage::Reply(r) => {
+                DOCUMENTS_RETURNED_TOTAL
+                    .with_label_values(&self.label_values(&client_request))
+                    .observe(r.number_returned as f64);
             },
             other => {
                 warn!("Unrecognized message_type: {:?}", other);

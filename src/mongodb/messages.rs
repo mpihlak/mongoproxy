@@ -92,13 +92,13 @@ impl fmt::Display for MsgHeader {
 #[derive(Debug)]
 pub struct MsgOpMsg {
     pub flag_bits:  u32,
-    pub sections:   Vec<bson::Document>,
+    pub documents:   Vec<bson::Document>,
 }
 
 impl fmt::Display for MsgOpMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "OP_MSG flags: {}", self.flag_bits)?;
-        for (i, v)  in self.sections.iter().enumerate() {
+        for (i, v)  in self.documents.iter().enumerate() {
             writeln!(f, "section {}: {}", i, v)?;
         }
         Ok(())
@@ -110,7 +110,7 @@ impl MsgOpMsg {
         let flag_bits = rdr.read_u32::<LittleEndian>()?;
         debug!("flag_bits={:04x}", flag_bits);
 
-        let mut sections = Vec::new();
+        let mut documents = Vec::new();
 
         loop {
             let kind = match rdr.read_u8() {
@@ -138,7 +138,7 @@ impl MsgOpMsg {
             match decode_document(&mut rdr) {
                 Ok(doc) => {
                     debug!("doc: {}", doc);
-                    sections.push(doc);
+                    documents.push(doc);
                 },
                 Err(e) => {
                     warn!("BSON decoder error: {:?}", e);
@@ -150,13 +150,13 @@ impl MsgOpMsg {
         // Note: there may be checksum following, but we've probably eaten
         // it's bytes while trying to decode the section list.
 
-        Ok(MsgOpMsg{flag_bits, sections})
+        Ok(MsgOpMsg{flag_bits, documents})
     }
 
     #[allow(dead_code)]
     pub fn write(&self, mut writer: impl Write) -> io::Result<()> {
         writer.write_u32::<LittleEndian>(self.flag_bits)?;
-        for section in self.sections.iter() {
+        for section in self.documents.iter() {
             let mut buf = Vec::new();
             bson::encode_document(&mut buf, section).unwrap();
 
@@ -289,11 +289,11 @@ impl MsgOpInsert {
 
 #[derive(Debug)]
 pub struct MsgOpReply {
-    flags:              u32,
-    cursor_id:          u64,
-    starting_from:      u32,
-    number_returned:    u32,
-    documents:          Vec<bson::Document>,
+    flags:                  u32,
+    cursor_id:              u64,
+    starting_from:          u32,
+    pub number_returned:    u32,
+    pub documents:          Vec<bson::Document>,
 }
 
 impl fmt::Display for MsgOpReply {

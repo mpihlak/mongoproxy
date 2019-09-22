@@ -219,12 +219,12 @@ mod tests {
     fn test_parse_msg() {
         init();
 
-        let mut msg = MsgOpMsg{ flag_bits: 0, sections: Vec::new() };
+        let mut msg = MsgOpMsg{ flag_bits: 0, documents: Vec::new() };
 
         // Craft a MongoDb OP_MSG. Something like: { insert: "kala", $db: "test" }
         let mut doc = bson::Document::new();
         doc.insert("insert".to_owned(), bson::Bson::String("foo".to_owned()));
-        msg.sections.push(doc);
+        msg.documents.push(doc);
 
         // Write the document to get the encoded length
         let mut msg_buf = Vec::new();
@@ -246,8 +246,8 @@ mod tests {
         let mut parser = MongoProtocolParser::new();
         match parser.parse_buffer(&buf) {
             Some(MongoMessage::Msg(m)) => {
-                assert_eq!(m.sections.len(), 1);
-                let doc = &m.sections[0];
+                assert_eq!(m.documents.len(), 1);
+                let doc = &m.documents[0];
                 assert_eq!(doc.get_str("insert").unwrap(), "foo");
             },
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
@@ -263,13 +263,13 @@ mod tests {
     fn test_parse_msg_sequence() {
         init();
 
-        let mut msg = MsgOpMsg{ flag_bits: 0, sections: Vec::new() };
+        let mut msg = MsgOpMsg{ flag_bits: 0, documents: Vec::new() };
 
         // Craft a fake MongoDb OP_MSG. Something like: { insert: "kala", $db: "test" }
         // calculate document size by writing it to a buffer.
         let mut doc = bson::Document::new();
         doc.insert("insert".to_owned(), bson::Bson::String("foo".to_owned()));
-        msg.sections.push(doc);
+        msg.documents.push(doc);
         let mut doc_buf = Vec::new();
         msg.write(&mut doc_buf).unwrap();
 
@@ -310,8 +310,8 @@ mod tests {
         // for the second header, it shouldn't have started parsing it.
         match parser.parse_buffer(&buf) {
             Some(MongoMessage::Msg(m)) => {
-                assert_eq!(m.sections.len(), 1);
-                let doc = &m.sections[0];
+                assert_eq!(m.documents.len(), 1);
+                let doc = &m.documents[0];
                 assert_eq!(doc.get_str("insert").unwrap(), "foo");
             },
             other => panic!("Couldn't parse the first message, got something else: {:?}", other),
@@ -339,8 +339,8 @@ mod tests {
         buf = doc_buf.to_vec();
         match parser.parse_buffer(&buf) {
             Some(MongoMessage::Msg(m)) => {
-                assert_eq!(m.sections.len(), 1);
-                let doc = &m.sections[0];
+                assert_eq!(m.documents.len(), 1);
+                let doc = &m.documents[0];
                 assert_eq!(doc.get_str("insert").unwrap(), "foo");
             },
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
