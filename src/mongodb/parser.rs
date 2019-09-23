@@ -71,7 +71,7 @@ impl MongoProtocolParser {
     // bytes and parse the message. Once the message is parsed we expect a header again and the
     // process repeats.
     //
-    pub fn parse_buffer(&mut self, buf: &[u8]) -> Vec<MongoMessage> {
+    pub fn parse_buffer(&mut self, buf: &[u8]) -> Vec<(MsgHeader, MongoMessage)> {
         if !self.parser_active {
             return vec![];
         }
@@ -108,7 +108,7 @@ impl MongoProtocolParser {
             } else {
                 match extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]) {
                     Ok(res) => {
-                        result.push(res);
+                        result.push((self.header.clone(), res));
                     },
                     Err(e) => {
                         error!("Error extracting message, stopping: {}", e);
@@ -226,10 +226,11 @@ mod tests {
         assert_eq!(result.len(), 1);
 
         match result.iter().next().unwrap() {
-            MongoMessage::Msg(m) => {
+            (h, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
-                let doc = &m.documents[0];
-                assert_eq!(doc.get_str("insert").unwrap(), "foo");
+                assert_eq!(h.request_id, 1234);
+                assert_eq!(h.response_to, 5678);
+                assert_eq!(m.documents[0].get_str("insert").unwrap(), "foo");
             },
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
         }
@@ -275,10 +276,9 @@ mod tests {
         // Now the parser must return the parsed first message. It also should have
         // started to parse the bytes for the header of the second message.
         match parser.parse_buffer(&buf).iter().next().unwrap() {
-            MongoMessage::Msg(m) => {
+            (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
-                let doc = &m.documents[0];
-                assert_eq!(doc.get_str("insert").unwrap(), "foo");
+                assert_eq!(m.documents[0].get_str("insert").unwrap(), "foo");
             },
             other => panic!("Couldn't parse the first message, got something else: {:?}", other),
         }
@@ -298,17 +298,16 @@ mod tests {
         // Also check that the header matches the second message.
         buf = second_msg_buf.to_vec();
         match parser.parse_buffer(&buf).iter().next().unwrap() {
-            MongoMessage::Msg(m) => {
+            (h, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
-                let doc = &m.documents[0];
-                assert_eq!(doc.get_str("delete").unwrap(), "bar");
+                assert_eq!(h.request_id, 5678);
+                assert_eq!(h.response_to, 1234);
+                assert_eq!(m.documents[0].get_str("delete").unwrap(), "bar");
             },
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
         }
 
         assert_eq!(parser.have_header, false);
-        assert_eq!(parser.header.request_id, 5678);
-        assert_eq!(parser.header.response_to, 1234);
         assert_eq!(parser.parser_active, true);
         assert_eq!(parser.want_bytes, messages::HEADER_LENGTH);
     }
@@ -339,20 +338,18 @@ mod tests {
         let mut it = result.iter();
 
         match it.next().unwrap() {
-            MongoMessage::Msg(m) => {
+            (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
-                let doc = &m.documents[0];
-                assert_eq!(doc.get_str("insert").unwrap(), "foo");
+                assert_eq!(m.documents[0].get_str("insert").unwrap(), "foo");
             },
             other => panic!("Couldn't parse the first message, got something else: {:?}", other),
         }
 
         // Now, parse and validate the second message.
         match it.next().unwrap() {
-            MongoMessage::Msg(m) => {
+            (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
-                let doc = &m.documents[0];
-                assert_eq!(doc.get_str("delete").unwrap(), "bar");
+                assert_eq!(m.documents[0].get_str("delete").unwrap(), "bar");
             },
             other => panic!("Couldn't parse the second message, got something else: {:?}", other),
         }

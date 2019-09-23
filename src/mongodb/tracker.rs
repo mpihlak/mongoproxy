@@ -185,9 +185,8 @@ impl MongoStatsTracker{
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for msg in self.client.parse_buffer(buf) {
-            info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr,
-                self.client.header, msg);
+        for (hdr, msg) in self.client.parse_buffer(buf) {
+            info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
             // For isMaster requests we  make an attempt to obtain connection metadata
             // from the payload. This will be sent on the first isMaster request and
@@ -229,20 +228,18 @@ impl MongoStatsTracker{
         CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for msg in self.server.parse_buffer(buf) {
-            info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr,
-                self.server.header, msg);
+        for (hdr, msg) in self.server.parse_buffer(buf) {
+            info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
             REQUEST_MATCH_HASHMAP_SIZE
                 .with_label_values(&[&format!("{:?}", thread::current().id())])
                 .set(self.client_request_map.len() as f64);
 
-            if let Some(client_request) = self.client_request_map.remove(&self.server.header.response_to) {
+            if let Some(client_request) = self.client_request_map.remove(&hdr.response_to) {
                 self.observe_server_response_to(msg, &client_request);
             } else {
                 RESPONSE_TO_REQUEST_MISMATCH.inc();
-                warn!("client request not found for server response to {}",
-                    self.server.header.response_to);
+                warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);
             }
         }
     }
