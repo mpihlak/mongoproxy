@@ -211,6 +211,11 @@ impl MongoStatsTracker{
 
             // We're always removing these entries if we get a server response to
             // the request. TODO: But what if some requests never get a response ...
+            //
+            // A a better approach would be to use a small circular buffer,
+            // So that we're adding entries until the buffer is full and then start
+            // replacing older entries. For lookup we'd just scan the whole buffer,
+            // and probably be still better off than with a HashMap, if the buf is small.
             let req = ClientRequest::from(msg);
             self.client_request_map.insert(self.client.header.request_id, req);
         }
