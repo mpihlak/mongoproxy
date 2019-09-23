@@ -185,7 +185,7 @@ impl MongoStatsTracker{
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        if let Some(msg) = self.client.parse_buffer(buf) {
+        for msg in self.client.parse_buffer(buf) {
             info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr,
                 self.client.header, msg);
 
@@ -198,7 +198,7 @@ impl MongoStatsTracker{
             // But sometimes it's called "ismaster" (mongoose) instead of "isMaster" so we need to
             // handle that as well.
             if let MongoMessage::Query(m) = &msg {
-                if m.query.contains_key("isMaster") || m.query.contains_key("ismaster") {
+                if self.client_application.is_empty() && m.query.contains_key("isMaster") || m.query.contains_key("ismaster") {
                     if let Some(bson::Bson::Document(client)) = m.query.get("client") {
                         if let Some(bson::Bson::Document(application)) = client.get("application") {
                             if let Ok(name) = application.get_str("name") {
@@ -224,7 +224,7 @@ impl MongoStatsTracker{
         CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        if let Some(msg) = self.server.parse_buffer(buf) {
+        for msg in self.server.parse_buffer(buf) {
             info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr,
                 self.server.header, msg);
 

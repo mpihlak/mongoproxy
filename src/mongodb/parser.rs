@@ -59,20 +59,23 @@ impl MongoProtocolParser {
         }
     }
 
-    // Parse the buffer and return the parsed object when ready.
+    // Parse the buffer and return the parsed objects.
     //
-    // parse_buffer expects that it is being fed chunks of the incoming
-    // stream. It tries to assemble MongoDb messages and returns the parsed
-    // message.
+    // parse_buffer expects that it is being fed chunks of the incoming stream. It tries to
+    // assemble MongoDb messages and returns the parsed messages.
     //
-    // The first message we always want to see is the MongoDb message header.
-    // This header in turn contains the length of the message that follows. So
-    // we try to read message length worth of bytes and parse the message. Once
-    // the message is parsed we expect a header again and the process repeats.
+    // Since MongoDb may send multiple messages in one go, we need to try and consume all the
+    // messages from the parser buffer. Otherwise we might leave some unparsed messages in the
+    // buffer and mess up the response/request sequence.
     //
-    pub fn parse_buffer(&mut self, buf: &[u8]) -> Option<MongoMessage> {
+    // The first message we always want to see is the MongoDb message header.  This header in turn
+    // contains the length of the message that follows. So we try to read message length worth of
+    // bytes and parse the message. Once the message is parsed we expect a header again and the
+    // process repeats.
+    //
+    pub fn parse_buffer(&mut self, buf: &[u8]) -> Vec<MongoMessage> {
         if !self.parser_active {
-            return None;
+            return vec![];
         }
 
         self.message_buf.extend(buf);
@@ -80,11 +83,9 @@ impl MongoProtocolParser {
             .with_label_values(&[&format!("{:?}", thread::current().id())])
             .set(self.message_buf.len() as f64);
 
-        let mut result = None;
+        let mut result = Vec::new();
         let mut loop_counter = 0;
-        // TODO: Instead of checking loop counter, we should check if we have a message.
-        // otherwise we could maybe end up overwriting the self.header with the header from
-        // the next message.
+
         while self.want_bytes > 0 && self.message_buf.len() >= self.want_bytes {
             // Since we entered the loop we have at least either the header or the message.
             // Make a note of the position where the next packet starts and consume the bytes
@@ -110,13 +111,13 @@ impl MongoProtocolParser {
             } else {
                 match extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]) {
                     Ok(res) => {
-                        result = Some(res);
+                        result.push(res);
                     },
                     Err(e) => {
                         error!("Error extracting message: {}", e);
                         MESSAGE_PARSE_ERRORS_COUNTER.with_label_values(&[&e.to_string()]).inc();
                         self.parser_active = false;
-                        return None;
+                        return result;
                     }
                 }
                 // We got the payload, time to ask for a header again
@@ -125,29 +126,13 @@ impl MongoProtocolParser {
                 self.want_bytes = messages::HEADER_LENGTH;
             }
 
-            // Point the message_buf to the bytes that we haven't yet processed
-            // And don't worry about performance, yet.
-            //
-            // TODO: Instead of allocating a new Vec here, we should use a slice to
-            // work on parts of the Vec. When I feel like taking on the borrow checker.
+            // Point the message_buf to the bytes that we haven't yet processed. 
             self.message_buf = self.message_buf[new_buffer_start..].to_vec();
-            debug!("loop {}: {} bytes in buffer, want {}", loop_counter, self.message_buf.len(), self.want_bytes);
+            debug!("loop {}: {} bytes in buffer, want {}",
+                   loop_counter, self.message_buf.len(), self.want_bytes);
             loop_counter += 1;
-
-            if result.is_some() {
-                break;
-            }
         }
 
-        if self.message_buf.len() >= self.want_bytes {
-            // We have enough bytes to at least start parsing another message.
-            // Not doing that may leave us waiting until the next Poll returns.
-            // TODO: Return a Vec of messages to handle this better.
-            debug!("parser: {} surplus bytes in buf and I want {}.",
-                self.message_buf.len(), self.want_bytes);
-        }
-
-        debug!("buf size={} result={:?}", buf.len(), result);
         result
     }
 }
@@ -244,8 +229,11 @@ mod tests {
         buf.extend(msg_buf);
 
         let mut parser = MongoProtocolParser::new();
-        match parser.parse_buffer(&buf) {
-            Some(MongoMessage::Msg(m)) => {
+        let results = parser.parse_buffer(&buf);
+        assert_eq!(results.len(), 1);
+
+        match results.iter().next().unwrap() {
+            MongoMessage::Msg(m) => {
                 assert_eq!(m.documents.len(), 1);
                 let doc = &m.documents[0];
                 assert_eq!(doc.get_str("insert").unwrap(), "foo");
@@ -285,17 +273,15 @@ mod tests {
         let mut parser = MongoProtocolParser::new();
 
         // Write the header of the first message and try parse. This must parse
-        // the header but return None because it doesn't have a message body.
+        // the header but return nothing because it doesn't have a message body yet.
         hdr.write(&mut buf).unwrap();
-        match parser.parse_buffer(&buf) {
-            None => {
-                assert_eq!(parser.have_header, true);
-                assert_eq!(parser.header.request_id, 1234);
-                assert_eq!(parser.header.response_to, 5678);
-            },
-            Some(msg) => {
-                panic!("wasn't expecting to parse anything but a header: {:?}", msg);
-            },
+        let result = parser.parse_buffer(&buf);
+        if result.len() == 0 {
+            assert_eq!(parser.have_header, true);
+            assert_eq!(parser.header.request_id, 1234);
+            assert_eq!(parser.header.response_to, 5678);
+        } else {
+            panic!("wasn't expecting to parse anything but a header: {:?}", result);
         }
 
         // Now "write" the remainder of the first message and also the header
@@ -306,10 +292,10 @@ mod tests {
         hdr.response_to = 1234;
         hdr.write(&mut buf).unwrap();
 
-        // Now the parser must return the parsed first message. While it has the bytes
-        // for the second header, it shouldn't have started parsing it.
-        match parser.parse_buffer(&buf) {
-            Some(MongoMessage::Msg(m)) => {
+        // Now the parser must return the parsed first message. It also should have
+        // started to parse the bytes for the header of the second message.
+        match parser.parse_buffer(&buf).iter().next().unwrap() {
+            MongoMessage::Msg(m) => {
                 assert_eq!(m.documents.len(), 1);
                 let doc = &m.documents[0];
                 assert_eq!(doc.get_str("insert").unwrap(), "foo");
@@ -317,28 +303,28 @@ mod tests {
             other => panic!("Couldn't parse the first message, got something else: {:?}", other),
         }
 
-        assert_eq!(parser.have_header, false);
-        assert_eq!(parser.have_message, true);
+        assert_eq!(parser.have_header, true);
+        assert_eq!(parser.have_message, false);
         assert_eq!(parser.parser_active, true);
-        assert_eq!(parser.want_bytes, messages::HEADER_LENGTH);
+        assert_eq!(parser.want_bytes, parser.header.message_length - messages::HEADER_LENGTH);
 
         // Now, the next call with empty buffer must parse the second message header
         // but not return the message itself.
-        match parser.parse_buffer(&[]) {
-            None => {
+        match parser.parse_buffer(&[]).is_empty() {
+            true => {
                 assert_eq!(parser.have_header, true);
                 assert_eq!(parser.have_message, false);
                 assert_eq!(parser.header.request_id, 5678);
                 assert_eq!(parser.header.response_to, 1234);
-            },
-            Some(other) => panic!("Instead of MongoMessage::None, got this: {:?}", other),
+            }
+            false => panic!("Expected nothing, got something"),
         }
 
         // Finally write the seconds message body and expect to parse the full message.
         // Also check that the header matches the second message.
         buf = doc_buf.to_vec();
-        match parser.parse_buffer(&buf) {
-            Some(MongoMessage::Msg(m)) => {
+        match parser.parse_buffer(&buf).iter().next().unwrap() {
+            MongoMessage::Msg(m) => {
                 assert_eq!(m.documents.len(), 1);
                 let doc = &m.documents[0];
                 assert_eq!(doc.get_str("insert").unwrap(), "foo");
