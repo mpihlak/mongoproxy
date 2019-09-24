@@ -10,14 +10,14 @@ print "Inserting some data"
 for i in range(1000):
     bigcollection.insert_one({ "a": "bbbbbbbbbbbbbbbbbbbb", "b": "CCCCCCCCCCCCCCCCCC"})
 
-start = time.time()
-coll = con['EchoGlobal']['botcollections']
+while True:
+    print "Now fetching it. ^C to exit"
+    count = 1000
 
-print "Now fetching it"
-count = 1000
-for i in range(count):
-    for res in coll.find({}).limit(1000):
-        pass
+    start = time.time()
+    for i in range(count):
+        for res in bigcollection.find({}).limit(1000):
+            pass
 
-elapsed = time.time() - start
-print "%d fetches done in %.2f seconds, %.3f / find" % (count, elapsed, elapsed/count)
+    elapsed = time.time() - start
+    print "%d fetches done in %.2f seconds, %.3f / find" % (count, elapsed, elapsed/count)
