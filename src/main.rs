@@ -68,11 +68,7 @@ fn main() {
             .value_name("METRICS_ADDR")
             .help(&format!("Hostport for Prometheus metrics endpoint ({})", METRICS_ADDR))
             .takes_value(true))
-        .arg(Arg::with_name("v")
-            .short("v")
-            .multiple(true)
-            .help("Sets the level of verbosity")
-        ).get_matches();
+        .get_matches();
 
     let server_addr = String::from(matches.value_of("server_addr").unwrap_or(SERVER_ADDR));
     let listen_addr = matches.value_of("listen_addr").unwrap_or(LISTEN_ADDR);
