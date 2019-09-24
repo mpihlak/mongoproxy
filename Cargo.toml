@@ -1,6 +1,6 @@
 [package]
 name = "mongoproxy"
-version = "0.1.7"
+version = "0.1.9"
 authors = ["mpihlak <martin.pihlak@starship.co>"]
 edition = "2018"
 
@@ -13,6 +13,7 @@ num-traits = '0.2'
 num-derive = '0.2'
 mio = '0.6'
 hyper = '0.12'
+hyper-router = "^0.5"
 prometheus = '0.7'
 lazy_static = '1.4'
 clap = '2.33'
