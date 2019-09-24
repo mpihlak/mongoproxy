@@ -38,11 +38,12 @@ lazy_static! {
 }
 
 pub struct MongoProtocolParser {
-    pub header:     messages::MsgHeader,
-    have_header:    bool,
-    want_bytes:     usize,
-    message_buf:    Vec<u8>,
-    parser_active:  bool,
+    pub header:         messages::MsgHeader,
+    have_header:        bool,
+    want_bytes:         usize,
+    message_buf:        Vec<u8>,
+    message_buf_pos:    usize,
+    parser_active:      bool,
 }
 
 impl MongoProtocolParser {
@@ -53,6 +54,7 @@ impl MongoProtocolParser {
             have_header: false,
             want_bytes: messages::HEADER_LENGTH,
             message_buf: Vec::new(),
+            message_buf_pos: 0,
             parser_active: true,
         }
     }
@@ -79,18 +81,19 @@ impl MongoProtocolParser {
         self.message_buf.extend(buf);
         THREAD_MESSAGE_BUF_SIZE
             .with_label_values(&[&format!("{:?}", thread::current().id())])
-            .set(self.message_buf.len() as f64);
+            .set(self.message_buf.capacity() as f64);
 
         let mut result = Vec::new();
+        let mut work_buf = &self.message_buf[self.message_buf_pos..];
         let mut loop_counter = 0;
 
-        while self.want_bytes > 0 && self.message_buf.len() >= self.want_bytes {
+        while self.want_bytes > 0 && work_buf.len() >= self.want_bytes {
             // Since we entered the loop we have either a header or a message body.
             // Make a note of the next packet starts and consume the bytes.
-            let next_buffer = &self.message_buf[self.want_bytes..];
+            self.message_buf_pos += self.want_bytes;
 
             if !self.have_header {
-                match MsgHeader::from_reader(&self.message_buf[..self.want_bytes]) {
+                match MsgHeader::from_reader(&work_buf[..self.want_bytes]) {
                     Ok(header) => {
                         assert!(header.message_length >= messages::HEADER_LENGTH);
                         self.header = header;
@@ -106,7 +109,7 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                match extract_message(self.header.op_code, &self.message_buf[..self.want_bytes]) {
+                match extract_message(self.header.op_code, &work_buf[..self.want_bytes]) {
                     Ok(res) => {
                         result.push((self.header.clone(), res));
                     },
@@ -123,10 +126,17 @@ impl MongoProtocolParser {
             }
 
             // Advance the message buf to the unprocessed bytes
-            self.message_buf = next_buffer.to_vec();
+            work_buf = &self.message_buf[self.message_buf_pos..];
             debug!("loop {}: {} bytes in buffer, want {}",
-                   loop_counter, self.message_buf.len(), self.want_bytes);
+                   loop_counter, work_buf.len(), self.want_bytes);
             loop_counter += 1;
+        }
+
+        if work_buf.len() == 0 {
+            debug!("Working buffer exhausted, starting anew. Parser buf was len={}, capacity={}",
+                self.message_buf.len(), self.message_buf.capacity());
+            self.message_buf_pos = 0;
+            self.message_buf.clear();
         }
 
         result
