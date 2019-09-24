@@ -136,7 +136,7 @@ impl ClientRequest {
             MongoMessage::Insert(_) |
             MongoMessage::Update(_) |
             MongoMessage::Delete(_) => {
-                warn!("Not processing labels obsolete INSERT,UPDATE or DELETE messages");
+                warn!("Not processing labels for obsolete INSERT, UPDATE or DELETE messages");
             },
             other => {
                 warn!("Labels not implemented for {}", other);
@@ -151,7 +151,7 @@ impl ClientRequest {
         }
     }
 
-    // Parser a fully qualified collection name into "db" and "coll".
+    // Parse a fully qualified collection name into "db" and "coll".
     // Both db and coll are expected to be empty before.
     fn parse_collname(full_collection_name: &str, db: &mut String, coll: &mut String) {
         let pos = full_collection_name.find('.').unwrap_or_else(|| full_collection_name.len());
