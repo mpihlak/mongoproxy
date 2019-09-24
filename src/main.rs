@@ -1,13 +1,18 @@
-use mio::{self, Token, Poll, PollOpt, Events, Ready};
-use mio::net::{TcpStream};
 use std::net::{TcpListener,SocketAddr,ToSocketAddrs};
 use std::io::{self, Read, Write};
 use std::{thread, str};
-use log::{info,warn,debug};
+
+use mio::{self, Token, Poll, PollOpt, Events, Ready};
+use mio::net::{TcpStream};
 use prometheus::{CounterVec,Counter,HistogramVec,Encoder,TextEncoder};
-use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
 use clap::{Arg, App};
 
+use hyper::{Request, Response, Body, header::CONTENT_TYPE};
+use hyper::server::Server;
+use hyper::rt::Future;
+use hyper_router::{Route, RouterBuilder, RouterService};
+
+use log::{info,warn,debug};
 use env_logger;
 
 #[macro_use]
@@ -23,7 +28,7 @@ use mongodb::tracker::{MongoStatsTracker};
 
 const SERVER_ADDR: &str = "127.0.0.1:27017";
 const LISTEN_ADDR: &str = "0.0.0.0:27111";
-const METRICS_ADDR: &str = "0.0.0.0:9898";
+const ADMIN_ADDR: &str = "0.0.0.0:9898";
 
 lazy_static! {
     static ref CONNECTION_COUNT_TOTAL: CounterVec =
@@ -62,17 +67,17 @@ fn main() {
             .value_name("LISTEN_ADDR")
             .help(&format!("Hostport where the proxy will listen on ({})", LISTEN_ADDR))
             .takes_value(true))
-        .arg(Arg::with_name("metrics_addr")
+        .arg(Arg::with_name("admin_addr")
             .short("m")
-            .long("metrics")
-            .value_name("METRICS_ADDR")
-            .help(&format!("Hostport for Prometheus metrics endpoint ({})", METRICS_ADDR))
+            .long("admin")
+            .value_name("ADMIN_ADDR")
+            .help(&format!("Hostport for admin endpoint ({})", ADMIN_ADDR))
             .takes_value(true))
         .get_matches();
 
     let server_addr = String::from(matches.value_of("server_addr").unwrap_or(SERVER_ADDR));
     let listen_addr = matches.value_of("listen_addr").unwrap_or(LISTEN_ADDR);
-    let metrics_addrs = matches.value_of("metrics_addr").unwrap_or(METRICS_ADDR);
+    let admin_addr = matches.value_of("admin_addr").unwrap_or(ADMIN_ADDR);
 
     // TODO: Validate the server address to prevent stupid typos. However
     // this would also prevent startup on random DNS timeouts.
@@ -83,8 +88,8 @@ fn main() {
     info!("Listening on {}", listen_addr);
     info!(" proxying to {}", server_addr);
 
-    start_metrics_listener(metrics_addrs);
-    info!("Metrics endpoint at http://{}", metrics_addrs);
+    start_admin_listener(admin_addr);
+    info!("Admin endpoint at http://{}", admin_addr);
 
     info!("^C to exit");
 
@@ -115,27 +120,51 @@ fn main() {
     }
 }
 
-pub fn start_metrics_listener(endpoint: &str) {
-    let serve_metrics = || {
-        let encoder = TextEncoder::new();
-        service_fn_ok(move |_request| {
-            let metric_families = prometheus::gather();
-            let mut buffer = vec![];
-            encoder.encode(&metric_families, &mut buffer).unwrap();
-
-            Response::builder()
-                .status(200)
-                .header(CONTENT_TYPE, encoder.format_type())
-                .body(Body::from(buffer))
-                .unwrap()
-        })
-    };
-
+pub fn start_admin_listener(endpoint: &str) {
     let server = Server::bind(&endpoint.parse().unwrap())
-        .serve(serve_metrics)
+        .serve(router_service)
         .map_err(|e| eprintln!("Metrics server error: {}", e));
 
     thread::spawn(|| hyper::rt::run(server));
+}
+
+fn router_service() -> Result<RouterService, std::io::Error> {
+    let router = RouterBuilder::new()
+        .add(Route::get("/").using(root_handler))
+        .add(Route::get("/health").using(health_handler))
+        .add(Route::get("/metrics").using(metrics_handler))
+        .build();
+
+    Ok(RouterService::new(router))
+}
+
+fn root_handler(_: Request<Body>) -> Response<Body> {
+    Response::builder()
+        .status(200)
+        .header(CONTENT_TYPE, "text/html")
+        .body(Body::from("<a href='/metrics'>/metrics</a>\n<br>\n<a href='/health'>/health</a>"))
+        .expect("Failed to construct the response")
+}
+
+fn health_handler(_: Request<Body>) -> Response<Body> {
+    Response::builder()
+        .status(200)
+        .header(CONTENT_TYPE, "text/plain")
+        .body(Body::from("OK"))
+        .expect("Failed to construct the response")
+}
+
+fn metrics_handler(_: Request<Body>) -> Response<Body> {
+    let encoder = TextEncoder::new();
+    let metric_families = prometheus::gather();
+    let mut buffer = vec![];
+    encoder.encode(&metric_families, &mut buffer).unwrap();
+
+    Response::builder()
+        .status(200)
+        .header(CONTENT_TYPE, encoder.format_type())
+        .body(Body::from(buffer))
+        .expect("Failed to construct the response")
 }
 
 // Main proxy logic. Open a connection to the server and start passing bytes
