@@ -1,4 +1,4 @@
-use super::messages::{MongoMessage};
+use super::messages::{MsgHeader,MongoMessage};
 use super::parser::MongoProtocolParser;
 use std::time::{Instant};
 use std::{thread};
@@ -216,7 +216,7 @@ impl MongoStatsTracker{
             // replacing older entries. For lookup we'd just scan the whole buffer,
             // and probably be still better off than with a HashMap, if the buf is small.
             let req = ClientRequest::from(msg);
-            self.client_request_map.insert(self.client.header.request_id, req);
+            self.client_request_map.insert(hdr.request_id, req);
         }
     }
 
@@ -236,7 +236,7 @@ impl MongoStatsTracker{
                 .set(self.client_request_map.len() as f64);
 
             if let Some(client_request) = self.client_request_map.remove(&hdr.response_to) {
-                self.observe_server_response_to(msg, &client_request);
+                self.observe_server_response_to(&hdr, msg, &client_request);
             } else {
                 RESPONSE_TO_REQUEST_MISMATCH.inc();
                 warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);
@@ -244,7 +244,7 @@ impl MongoStatsTracker{
         }
     }
 
-    fn observe_server_response_to(&self, msg: MongoMessage, client_request: &ClientRequest) {
+    fn observe_server_response_to(&self, hdr: &MsgHeader, msg: MongoMessage, client_request: &ClientRequest) {
         let time_to_response = client_request.message_time.elapsed().as_millis();
 
         SERVER_RESPONSE_FIRST_BYTE_SECONDS
@@ -252,7 +252,7 @@ impl MongoStatsTracker{
             .observe(time_to_response as f64 / 1000.0);
         SERVER_RESPONSE_SIZE_TOTAL
             .with_label_values(&self.label_values(&client_request))
-            .observe(self.server.header.message_length as f64);
+            .observe(hdr.message_length as f64);
 
         // Look into the server response and exract some counters from it.
         // Things like number of documents returned, inserted, updated, deleted.
