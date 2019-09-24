@@ -37,6 +37,12 @@ lazy_static! {
             "Total number of client connections established",
             &["client"]).unwrap();
 
+    static ref DISCONNECTION_COUNT_TOTAL: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_client_disconnections_total",
+            "Total number of client disconnections",
+            &["client"]).unwrap();
+
     static ref CONNECTION_ERRORS_TOTAL: Counter =
         register_counter!(
             "mongoproxy_client_connection_errors_total",
@@ -250,6 +256,8 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
             }
         }
     }
+
+    DISCONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
     Ok(())
 }
