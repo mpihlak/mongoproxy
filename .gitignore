@@ -1,6 +1,7 @@
 /target
 testing/data
 testing/log
+tmp/*
 **/*.rs.bk
 TODO.txt
 *.sw[op]
