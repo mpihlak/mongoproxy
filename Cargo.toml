@@ -1,8 +1,11 @@
 [package]
 name = "mongoproxy"
-version = "0.1.9"
+version = "0.1.10"
 authors = ["mpihlak <martin.pihlak@starship.co>"]
 edition = "2018"
+
+[profile.release]
+debug = true
 
 [dependencies]
 byteorder = '1.3'
