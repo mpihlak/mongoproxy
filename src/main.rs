@@ -237,7 +237,10 @@ fn copy_stream_with_fn(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
                 return Ok(false);   // EOF
             }
             Ok(len) => {
-                to_stream.write_all(&buf[0..len])?;
+                if let Err(e) = to_stream.write_all(&buf[0..len]) {
+                    warn!("{:?}: Socket write failed: {}", thread::current().id(), e);
+                    return Err(e);
+                }
                 process_bytes(&buf[0..len]);
             },
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
