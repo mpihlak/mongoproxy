@@ -1,6 +1,6 @@
 use std::net::{TcpListener,SocketAddr,ToSocketAddrs};
 use std::io::{self, Read, Write};
-use std::{thread, str};
+use std::{thread, time, str};
 
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
@@ -12,7 +12,7 @@ use hyper::server::Server;
 use hyper::rt::Future;
 use hyper_router::{Route, RouterBuilder, RouterService};
 
-use log::{info,warn,debug};
+use log::{info,warn,error,debug};
 use env_logger;
 
 #[macro_use]
@@ -226,7 +226,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
 // to send bytes.
 //
 // Returns false if EOF reached on the from_stream.
-fn copy_stream_with_fn(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
+fn copy_stream_with_fn(from_stream: &mut TcpStream, mut to_stream: &mut TcpStream,
         process_bytes: &mut dyn FnMut(&[u8])) -> std::io::Result<bool> {
 
     let mut buf = [0; 1024];
@@ -237,10 +237,7 @@ fn copy_stream_with_fn(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
                 return Ok(false);   // EOF
             }
             Ok(len) => {
-                if let Err(e) = to_stream.write_all(&buf[0..len]) {
-                    warn!("{:?}: Socket write failed: {}", thread::current().id(), e);
-                    return Err(e);
-                }
+                write_to_stream(&mut to_stream, &buf[..len])?;
                 process_bytes(&buf[0..len]);
             },
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -251,6 +248,27 @@ fn copy_stream_with_fn(from_stream: &mut TcpStream, to_stream: &mut TcpStream,
             },
         }
     }
+}
+
+// Write the buffer to the stream, waiting out the EAGAIN errors
+// TODO: remove this hack
+fn write_to_stream(stream: &mut TcpStream, mut buf: &[u8]) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        match stream.write(buf) {
+            Ok(len) => {
+                buf = &buf[len..];
+            },
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                warn!("{:?}: write would have blocked: {}", thread::current().id(), e);
+                thread::sleep(time::Duration::from_millis(1));
+            },
+            Err(other) => {
+                error!("{:?}: write error: {}", thread::current().id(), other);
+                return Err(other);
+            },
+        }
+    }
+    Ok(())
 }
 
 fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
