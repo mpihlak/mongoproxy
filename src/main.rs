@@ -4,7 +4,7 @@ use std::{thread, str};
 
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
-use prometheus::{CounterVec,Counter,HistogramVec,Encoder,TextEncoder};
+use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App};
 
 use hyper::{Request, Response, Body, header::CONTENT_TYPE};
@@ -43,10 +43,11 @@ lazy_static! {
             "Total number of client disconnections",
             &["client"]).unwrap();
 
-    static ref CONNECTION_ERRORS_TOTAL: Counter =
-        register_counter!(
+    static ref CONNECTION_ERRORS_TOTAL: CounterVec =
+        register_counter_vec!(
             "mongoproxy_client_connection_errors_total",
-            "Total number of errors from handle_connections").unwrap();
+            "Total number of errors from handle_connections",
+            &["client"]).unwrap();
 
     static ref SERVER_CONNECT_TIME_SECONDS: HistogramVec =
         register_histogram_vec!(
@@ -119,7 +120,9 @@ fn main() {
                         },
                         Err(e) => {
                             warn!("{} connection error: {}", client_addr, e);
-                            CONNECTION_ERRORS_TOTAL.inc();
+                            CONNECTION_ERRORS_TOTAL
+                                .with_label_values(&[&client_addr.to_string()])
+                                .inc();
                         },
                     };
                 });
