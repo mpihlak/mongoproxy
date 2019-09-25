@@ -290,7 +290,7 @@ impl MongoStatsTracker{
             MongoMessage::Reply(r) => {
                 DOCUMENTS_RETURNED_TOTAL
                     .with_label_values(&self.label_values(&client_request))
-                    .observe(r.number_returned as f64);
+                    .observe(f64::from(r.number_returned));
             },
             other => {
                 warn!("Unrecognized message_type: {:?}", other);

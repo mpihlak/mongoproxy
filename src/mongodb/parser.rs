@@ -132,7 +132,7 @@ impl MongoProtocolParser {
             loop_counter += 1;
         }
 
-        if work_buf.len() == 0 {
+        if work_buf.is_empty() {
             debug!("Working buffer exhausted, starting anew. Parser buf was len={}, capacity={}",
                 self.message_buf.len(), self.message_buf.capacity());
             self.message_buf_pos = 0;
@@ -190,8 +190,8 @@ mod tests {
     fn create_header(request_id: u32, response_to: u32, msg_buf: &Vec<u8>) -> MsgHeader {
         MsgHeader {
             message_length: messages::HEADER_LENGTH + msg_buf.len(),
-            request_id: request_id,
-            response_to: response_to,
+            request_id,
+            response_to,
             op_code: 2013,
         }
     }
