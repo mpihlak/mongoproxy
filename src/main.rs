@@ -134,53 +134,6 @@ fn main() {
     }
 }
 
-pub fn start_admin_listener(endpoint: &str) {
-    let server = Server::bind(&endpoint.parse().unwrap())
-        .serve(router_service)
-        .map_err(|e| eprintln!("Metrics server error: {}", e));
-
-    thread::spawn(|| hyper::rt::run(server));
-}
-
-fn router_service() -> Result<RouterService, std::io::Error> {
-    let router = RouterBuilder::new()
-        .add(Route::get("/").using(root_handler))
-        .add(Route::get("/health").using(health_handler))
-        .add(Route::get("/metrics").using(metrics_handler))
-        .build();
-
-    Ok(RouterService::new(router))
-}
-
-fn root_handler(_: Request<Body>) -> Response<Body> {
-    Response::builder()
-        .status(200)
-        .header(CONTENT_TYPE, "text/html")
-        .body(Body::from("<a href='/metrics'>/metrics</a>\n<br>\n<a href='/health'>/health</a>"))
-        .expect("Failed to construct the response")
-}
-
-fn health_handler(_: Request<Body>) -> Response<Body> {
-    Response::builder()
-        .status(200)
-        .header(CONTENT_TYPE, "text/plain")
-        .body(Body::from("OK"))
-        .expect("Failed to construct the response")
-}
-
-fn metrics_handler(_: Request<Body>) -> Response<Body> {
-    let encoder = TextEncoder::new();
-    let metric_families = prometheus::gather();
-    let mut buffer = vec![];
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-
-    Response::builder()
-        .status(200)
-        .header(CONTENT_TYPE, encoder.format_type())
-        .body(Body::from(buffer))
-        .expect("Failed to construct the response")
-}
-
 // Main proxy logic. Open a connection to the server and start passing bytes
 // between the client and the server. Also split the traffic to MongoDb protocol
 // parser, so that we can get some stats out of this.
@@ -312,4 +265,51 @@ fn format_client_address(sockaddr: &SocketAddr) -> String {
         addr_str.split_off(pos);
     }
     addr_str
+}
+
+pub fn start_admin_listener(endpoint: &str) {
+    let server = Server::bind(&endpoint.parse().unwrap())
+        .serve(router_service)
+        .map_err(|e| eprintln!("Metrics server error: {}", e));
+
+    thread::spawn(|| hyper::rt::run(server));
+}
+
+fn router_service() -> Result<RouterService, std::io::Error> {
+    let router = RouterBuilder::new()
+        .add(Route::get("/").using(root_handler))
+        .add(Route::get("/health").using(health_handler))
+        .add(Route::get("/metrics").using(metrics_handler))
+        .build();
+
+    Ok(RouterService::new(router))
+}
+
+fn root_handler(_: Request<Body>) -> Response<Body> {
+    Response::builder()
+        .status(200)
+        .header(CONTENT_TYPE, "text/html")
+        .body(Body::from("<a href='/metrics'>/metrics</a>\n<br>\n<a href='/health'>/health</a>"))
+        .expect("Failed to construct the response")
+}
+
+fn health_handler(_: Request<Body>) -> Response<Body> {
+    Response::builder()
+        .status(200)
+        .header(CONTENT_TYPE, "text/plain")
+        .body(Body::from("OK"))
+        .expect("Failed to construct the response")
+}
+
+fn metrics_handler(_: Request<Body>) -> Response<Body> {
+    let encoder = TextEncoder::new();
+    let metric_families = prometheus::gather();
+    let mut buffer = vec![];
+    encoder.encode(&metric_families, &mut buffer).unwrap();
+
+    Response::builder()
+        .status(200)
+        .header(CONTENT_TYPE, encoder.format_type())
+        .body(Body::from(buffer))
+        .expect("Failed to construct the response")
 }
