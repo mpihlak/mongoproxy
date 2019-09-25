@@ -136,7 +136,10 @@ impl MongoProtocolParser {
             debug!("Working buffer exhausted, starting anew. Parser buf was len={}, capacity={}",
                 self.message_buf.len(), self.message_buf.capacity());
             self.message_buf_pos = 0;
-            self.message_buf.clear();
+
+            // Create a new Vec to get rid of any allocated memory.
+            // TODO: Benchmark if this is actually better than clearing the Vec.
+            self.message_buf = Vec::new();
         }
 
         result
