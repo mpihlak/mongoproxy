@@ -111,7 +111,12 @@ fn main() {
                 thread::spawn(move || {
                     info!("new connection from {}", client_addr);
                     match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap()) {
-                        Ok(_) => info!("{} closing connection.", client_addr),
+                        Ok(_) => {
+                            info!("{} closing connection.", client_addr);
+                            DISCONNECTION_COUNT_TOTAL
+                                .with_label_values(&[&client_addr.to_string()])
+                                .inc();
+                        },
                         Err(e) => {
                             warn!("{} connection error: {}", client_addr, e);
                             CONNECTION_ERRORS_TOTAL.inc();
@@ -256,8 +261,6 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
             }
         }
     }
-
-    DISCONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
     Ok(())
 }
