@@ -16,9 +16,9 @@ RUN rm target/debug/deps/mongoproxy*
 COPY src ./src
 RUN cargo build
 
-FROM debian:buster-slim
+FROM debug-image
 
-RUN apt-get update && apt-get install -y procps sysstat
+RUN apt-get update && apt-get install -y procps sysstat net-tools curl heaptrack valgrind gdb rust-gdb
 
 WORKDIR /mongoproxy
 COPY --from=builder /build/mongoproxy/target/debug/mongoproxy ./
