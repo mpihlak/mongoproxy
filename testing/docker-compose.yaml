@@ -20,3 +20,12 @@ services:
       driver: none
     ports:
       - "27017:27017"
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus
+    logging:
+      driver: none
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
