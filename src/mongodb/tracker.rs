@@ -149,6 +149,8 @@ impl ClientRequest {
                                     .tag(Tag::new("collection", coll.to_owned()))
                                     .tag(Tag::new("db", db.to_owned()))
                                     .start();
+
+                                // TODO: Add server address tag
                             },
                             other => {
                                 debug!("No trace id found in the comment: {:?}", other);

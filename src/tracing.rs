@@ -1,19 +1,32 @@
 use std::thread;
 use std::collections::HashMap;
-use log::{info,debug};
+use log::{warn,info,debug};
 
-use rustracing::{self,sampler::AllSampler,span::SpanContext};
-use rustracing::carrier::ExtractFromTextMap;
-use rustracing_jaeger::{Tracer};
+use rustracing::{self,sampler::AllSampler,span::SpanContext,carrier::ExtractFromTextMap};
+use rustracing_jaeger::{Tracer,reporter::JaegerCompactReporter};
 
 
 lazy_static! {
     static ref GLOBAL_TRACER: Tracer = {
         let (span_tx, span_rx) = crossbeam_channel::unbounded();
 
+        // TODO:
+        // * Only do this if Jaeger was actually requested
+        // * Get the service name and tags from parameters
+        // * Consider startup race with Jaeger agent and other transient init failures
+        let reporter = JaegerCompactReporter::new("mongoproxy").unwrap();
+
         thread::spawn(move || {
             for span in span_rx {
                 info!("# SPAN: {:?}", span);
+                match reporter.report(&[span]) {
+                    Ok(_) => {
+                        info!("Sent to collector");
+                    },
+                    Err(e) => {
+                        warn!("Failed to report span: {}", e);
+                    },
+                }
             }
         });
 
