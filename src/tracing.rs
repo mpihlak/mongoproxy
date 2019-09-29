@@ -1,5 +1,6 @@
 use std::thread;
 use std::collections::HashMap;
+use log::{info,debug};
 
 use rustracing::{self,sampler::AllSampler,span::SpanContext};
 use rustracing::carrier::ExtractFromTextMap;
@@ -11,8 +12,8 @@ lazy_static! {
         let (span_tx, span_rx) = crossbeam_channel::unbounded();
 
         thread::spawn(move || {
-            while let Ok(span) = span_rx.try_recv() {
-                println!("# SPAN: {:?}", span);
+            for span in span_rx {
+                info!("# SPAN: {:?}", span);
             }
         });
 
@@ -35,6 +36,8 @@ pub fn extract_from_text<T>(span_text: &str) -> rustracing::Result<Option<SpanCo
     // For now expect that the trace is something like "uber-trace-id:1232132132:323232:1"
     if span_text.starts_with(TRACE_ID_PREFIX) && span_text.len() > TRACE_ID_PREFIX.len() {
         let mut text_map = HashMap::new();
+        debug!("trace-id-prefix: {}", TRACE_ID_PREFIX);
+        debug!("trace-id: {}", &span_text[TRACE_ID_PREFIX.len()+1..]);
         text_map.insert(
             TRACE_ID_PREFIX.to_string(),
             span_text[TRACE_ID_PREFIX.len()+1..].to_string()

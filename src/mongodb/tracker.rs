@@ -7,7 +7,9 @@ use std::{thread};
 use std::collections::{HashMap, HashSet};
 use log::{debug,info,warn};
 use prometheus::{Counter,CounterVec,HistogramVec,GaugeVec};
-use rustracing::span::{Span};
+
+use rustracing::span::Span;
+use rustracing::tag::Tag;
 use rustracing_jaeger::span::{SpanContextState};
 
 lazy_static! {
@@ -87,11 +89,11 @@ struct ClientRequest {
     op: String,
     db: String,
     coll: String,
-    _span: Span<SpanContextState>,
+    span: Span<SpanContextState>,
 }
 
 impl ClientRequest {
-    fn from(msg: MongoMessage) -> Self {
+    fn from(client_addr: &str, app_name: &str, msg: MongoMessage) -> Self {
         let message_time = Instant::now();
         let mut op = String::from("");
         let mut db = String::from("");
@@ -127,11 +129,22 @@ impl ClientRequest {
                         db = have_db.to_string();
                     }
                     if let Ok(comm) = s.get_str("comment") {
-                        if let Ok(Some(parent_span)) = tracing::extract_from_text(comm) {
-                            span = tracing::global_tracer()
-                                .span(op.to_owned())
-                                .child_of(&parent_span)
-                                .start();
+                        debug!("Have a comment field: {}", comm);
+                        match tracing::extract_from_text(comm) {
+                            Ok(Some(parent_span)) => {
+                                debug!("Extracted trace header: {:?}", parent_span);
+                                span = tracing::global_tracer()
+                                    .span(op.to_owned())
+                                    .child_of(&parent_span)
+                                    .tag(Tag::new("appName", app_name.to_owned()))
+                                    .tag(Tag::new("client", client_addr.to_owned()))
+                                    .tag(Tag::new("collection", coll.to_owned()))
+                                    .tag(Tag::new("db", db.to_owned()))
+                                    .start();
+                            },
+                            other => {
+                                debug!("No trace id found in the comment: {:?}", other);
+                            },
                         }
                     }
                 }
@@ -158,7 +171,7 @@ impl ClientRequest {
             db,
             op,
             message_time,
-            _span: span,
+            span,
         }
     }
 
@@ -226,7 +239,7 @@ impl MongoStatsTracker{
             // So that we're adding entries until the buffer is full and then start
             // replacing older entries. For lookup we'd just scan the whole buffer,
             // and probably be still better off than with a HashMap, if the buf is small.
-            let req = ClientRequest::from(msg);
+            let req = ClientRequest::from(&self.client_addr, &self.client_application, msg);
             self.client_request_map.insert(hdr.request_id, req);
         }
     }
@@ -246,8 +259,8 @@ impl MongoStatsTracker{
                 .with_label_values(&[&format!("{:?}", thread::current().id())])
                 .set(self.client_request_map.len() as f64);
 
-            if let Some(client_request) = self.client_request_map.remove(&hdr.response_to) {
-                self.observe_server_response_to(&hdr, msg, &client_request);
+            if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
+                self.observe_server_response_to(&hdr, msg, &mut client_request);
                 // If the client_request had a span, it will be automatically sent down the
                 // channel here.
                 // TODO: Add any tags and log before that happens.
@@ -258,7 +271,7 @@ impl MongoStatsTracker{
         }
     }
 
-    fn observe_server_response_to(&self, hdr: &MsgHeader, msg: MongoMessage, client_request: &ClientRequest) {
+    fn observe_server_response_to(&self, hdr: &MsgHeader, msg: MongoMessage, client_request: &mut ClientRequest) {
         let time_to_response = client_request.message_time.elapsed().as_millis();
 
         SERVER_RESPONSE_FIRST_BYTE_SECONDS
@@ -280,6 +293,9 @@ impl MongoStatsTracker{
                         for key in ["firstBatch", "nextBatch"].iter() {
                             if let Ok(batch) = cursor.get_array(key) {
                                 debug!("documents returned={}", batch.len());
+                                client_request.span.set_tag(|| {
+                                    Tag::new("documents_returned", batch.len() as i64)
+                                });
                                 DOCUMENTS_RETURNED_TOTAL
                                     .with_label_values(&self.label_values(&client_request))
                                     .observe(batch.len() as f64);
@@ -298,6 +314,9 @@ impl MongoStatsTracker{
                         } else {
                             section.get_i32("n").unwrap_or(0)
                         };
+                        client_request.span.set_tag(|| {
+                            Tag::new("documents_changed", num_rows as i64)
+                        });
                         DOCUMENTS_CHANGED_TOTAL
                             .with_label_values(&self.label_values(&client_request))
                             .observe(f64::from(num_rows.abs()));
@@ -305,6 +324,9 @@ impl MongoStatsTracker{
                 }
             },
             MongoMessage::Reply(r) => {
+                client_request.span.set_tag(|| {
+                    Tag::new("documents_returned", r.number_returned as i64)
+                });
                 DOCUMENTS_RETURNED_TOTAL
                     .with_label_values(&self.label_values(&client_request))
                     .observe(f64::from(r.number_returned));
