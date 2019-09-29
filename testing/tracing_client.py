@@ -18,7 +18,7 @@ if __name__ == "__main__":
             },
             'logging': True,
         },
-        service_name='python_tracing_client',
+        service_name='tracing_client',
         validate=True,
     )
 
