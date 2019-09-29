@@ -1,5 +1,7 @@
 use std::thread;
 use std::collections::HashMap;
+use std::net::{SocketAddr};
+
 use log::{warn,info,debug};
 
 use rustracing::{self,sampler::AllSampler,span::SpanContext,carrier::ExtractFromTextMap};
@@ -8,7 +10,7 @@ use rustracing_jaeger::{Tracer,reporter::JaegerCompactReporter};
 
 // Initialize the tracer and start the thread that writes the spans to Jaeger.
 // The tracer then needs to be cloned and passed to each thread.
-pub fn init_tracer(enable_tracer: bool, service_name: &str, jaeger_addr: &str) -> Option<Tracer> {
+pub fn init_tracer(enable_tracer: bool, service_name: &str, jaeger_addr: SocketAddr) -> Option<Tracer> {
     if !enable_tracer {
         info!("Tracing not enabled.");
         return None;
@@ -20,9 +22,10 @@ pub fn init_tracer(enable_tracer: bool, service_name: &str, jaeger_addr: &str) -
     let (span_tx, span_rx) = crossbeam_channel::unbounded();
     let service_name = service_name.to_owned();
 
-    thread::spawn(move || {
-        let reporter = JaegerCompactReporter::new(&service_name).unwrap();
+    let mut reporter = JaegerCompactReporter::new(&service_name).unwrap();
+    reporter.set_agent_addr(jaeger_addr).unwrap();
 
+    thread::spawn(move || {
         for span in span_rx {
             info!("# SPAN: {:?}", span);
             match reporter.report(&[span]) {
