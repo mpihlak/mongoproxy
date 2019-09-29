@@ -7,13 +7,11 @@ use rustracing_jaeger::{Tracer,reporter::JaegerCompactReporter};
 
 
 lazy_static! {
+
+    // TODO: This can't be thread safe ... can it
     static ref GLOBAL_TRACER: Tracer = {
         let (span_tx, span_rx) = crossbeam_channel::unbounded();
 
-        // TODO:
-        // * Only do this if Jaeger was actually requested
-        // * Get the service name and tags from parameters
-        // * Consider startup race with Jaeger agent and other transient init failures
         let reporter = JaegerCompactReporter::new("mongoproxy").unwrap();
 
         thread::spawn(move || {
@@ -30,14 +28,22 @@ lazy_static! {
             }
         });
 
+        // TODO: make the sampling strategy configurable.
         Tracer::with_sender(AllSampler, span_tx)
     };
 }
 
-/// Default registry (global static).
-pub fn global_tracer() -> &'static Tracer {
+// Initialize the global tracer and start the thread that writes the spans to Jaeger
+pub fn initialize(service_name: &str, jaeger_addr: &str) {
+    info!("Initializing tracer with service name {}, agent address: {}",
+        service_name, jaeger_addr);
+
+    // TODO: Actually initialize the global tracer
+}
+
+pub fn global_tracer() -> Option<&'static Tracer> {
     lazy_static::initialize(&GLOBAL_TRACER);
-    &GLOBAL_TRACER
+    Some(&GLOBAL_TRACER)
 }
 
 // Extract the span from a text map
@@ -47,6 +53,7 @@ pub fn extract_from_text<T>(span_text: &str) -> rustracing::Result<Option<SpanCo
     const TRACE_ID_PREFIX: &str = "uber-trace-id";
 
     // For now expect that the trace is something like "uber-trace-id:1232132132:323232:1"
+    // No spaces, quotation marks or other funny stuff.
     if span_text.starts_with(TRACE_ID_PREFIX) && span_text.len() > TRACE_ID_PREFIX.len() {
         let mut text_map = HashMap::new();
         debug!("trace-id-prefix: {}", TRACE_ID_PREFIX);

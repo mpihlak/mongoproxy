@@ -134,22 +134,23 @@ impl ClientRequest {
                         //
                         // Examples:
                         // { q: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, limit: 0 }
-                        // { q: { a: 1, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, u: { _id: ObjectId("5d85ee8fe937b3fc0c8c59a1") }, multi: false, upsert: false }
                         // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "Don't allow negative inputs." } }, { $group: { _id: { $mod: ["$x", 2] }, total: { $sum: "$x" } } }], cursor: {}, lsid: { id: BinData(4, 0x9475c2aa25ef4fa2b9c8ea1fdfe26e11) }, $db: "test" }
                         // { count: "kala", query: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, fields: {}, lsid: { id: BinData(4, 0xcb2088547ee247ec90c1562f21fef0a1) }, $db: "test" }
                         debug!("Have a comment field: {}", comm);
                         match tracing::extract_from_text(comm) {
                             Ok(Some(parent_span)) => {
                                 debug!("Extracted trace header: {:?}", parent_span);
-                                span = tracing::global_tracer()
-                                    .span(op.to_owned())
-                                    .child_of(&parent_span)
-                                    .tag(Tag::new("appName", app_name.to_owned()))
-                                    .tag(Tag::new("client", client_addr.to_owned()))
-                                    .tag(Tag::new("server", server_addr.to_owned()))
-                                    .tag(Tag::new("collection", coll.to_owned()))
-                                    .tag(Tag::new("db", db.to_owned()))
-                                    .start();
+                                if let Some(tracer) = tracing::global_tracer() {
+                                    span = tracer
+                                        .span(op.to_owned())
+                                        .child_of(&parent_span)
+                                        .tag(Tag::new("appName", app_name.to_owned()))
+                                        .tag(Tag::new("client", client_addr.to_owned()))
+                                        .tag(Tag::new("server", server_addr.to_owned()))
+                                        .tag(Tag::new("collection", coll.to_owned()))
+                                        .tag(Tag::new("db", db.to_owned()))
+                                        .start();
+                                }
                             },
                             other => {
                                 debug!("No trace id found in the comment: {:?}", other);
@@ -273,8 +274,7 @@ impl MongoStatsTracker{
             if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
                 self.observe_server_response_to(&hdr, msg, &mut client_request);
                 // If the client_request had a span, it will be automatically sent down the
-                // channel here.
-                // TODO: Add any tags and log before that happens.
+                // channel as it goes out of scope here.
             } else {
                 RESPONSE_TO_REQUEST_MISMATCH.inc();
                 warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);

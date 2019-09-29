@@ -27,8 +27,10 @@ mod tracing;
 use mongodb::tracker::{MongoStatsTracker};
 
 const SERVER_ADDR: &str = "127.0.0.1:27017";
+const JAEGER_ADDR: &str = "127.0.0.1:6831";
 const LISTEN_ADDR: &str = "0.0.0.0:27111";
 const ADMIN_ADDR: &str = "0.0.0.0:9898";
+const SERVICE_NAME: &str = "mongoproxy";
 
 lazy_static! {
     static ref CONNECTION_COUNT_TOTAL: CounterVec =
@@ -62,20 +64,33 @@ fn main() {
         .version(crate_version!())
         .about("Proxies MongoDb requests to obtain metrics")
         .arg(Arg::with_name("server_addr")
-            .short("h")
             .long("hostport")
             .value_name("server host:port")
             .help("MongoDb server hostport to proxy to")
             .takes_value(true)
             .required(true))
+        .arg(Arg::with_name("enable_jaeger")
+            .long("enable-jaeger")
+            .help("Enable distributed tracing with Jaeger")
+            .takes_value(false)
+            .required(false))
+        .arg(Arg::with_name("jaeger_addr")
+            .long("jaeger-addr")
+            .value_name("Jaeger agent host:port")
+            .help("Jaeger agent to send traces to (compact thrift protocol)")
+            .takes_value(true)
+            .required(false))
+        .arg(Arg::with_name("service_name")
+            .long("service-name")
+            .value_name("SERVICE_NAME")
+            .help("Service name that will be used in Jaeger traces and metric labels")
+            .takes_value(true))
         .arg(Arg::with_name("listen_addr")
-            .short("l")
             .long("listen")
             .value_name("LISTEN_ADDR")
             .help(&format!("Hostport where the proxy will listen on ({})", LISTEN_ADDR))
             .takes_value(true))
         .arg(Arg::with_name("admin_addr")
-            .short("m")
             .long("admin")
             .value_name("ADMIN_ADDR")
             .help(&format!("Hostport for admin endpoint ({})", ADMIN_ADDR))
@@ -85,6 +100,10 @@ fn main() {
     let server_addr = String::from(matches.value_of("server_addr").unwrap_or(SERVER_ADDR));
     let listen_addr = matches.value_of("listen_addr").unwrap_or(LISTEN_ADDR);
     let admin_addr = matches.value_of("admin_addr").unwrap_or(ADMIN_ADDR);
+    let service_name = matches.value_of("service_name").unwrap_or(SERVICE_NAME);
+
+    let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
+    let jaeger_addr = matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR);
 
     // TODO: Validate the server address to prevent stupid typos. However
     // this would also prevent startup on random DNS timeouts.
@@ -97,6 +116,11 @@ fn main() {
 
     start_admin_listener(admin_addr);
     info!("Admin endpoint at http://{}", admin_addr);
+
+    if enable_jaeger {
+        info!("Sending Jaeger traces to: {}", jaeger_addr);
+        tracing::initialize(&service_name, &jaeger_addr);
+    }
 
     info!("^C to exit");
 
