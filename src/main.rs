@@ -12,6 +12,8 @@ use hyper::server::Server;
 use hyper::rt::Future;
 use hyper_router::{Route, RouterBuilder, RouterService};
 
+use rustracing_jaeger::{Tracer};
+
 use log::{info,warn,error,debug};
 use env_logger;
 
@@ -117,12 +119,7 @@ fn main() {
     start_admin_listener(admin_addr);
     info!("Admin endpoint at http://{}", admin_addr);
 
-    if enable_jaeger {
-        info!("Sending Jaeger traces to: {}", jaeger_addr);
-        tracing::initialize(&service_name, &jaeger_addr);
-    }
-
-    info!("^C to exit");
+    let tracer = tracing::init_tracer(enable_jaeger, &service_name, &jaeger_addr);
 
     for stream in listener.incoming() {
         match stream {
@@ -131,11 +128,12 @@ fn main() {
                 // such as linkerd. So not as useful, but we keep it anyway.
                 let client_addr = format_client_address(&stream.peer_addr().unwrap());
                 let server_addr = server_addr.clone();
+                let tracer = tracer.clone();
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
                 thread::spawn(move || {
                     info!("new connection from {}", client_addr);
-                    match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap()) {
+                    match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap(), tracer) {
                         Ok(_) => {
                             info!("{} closing connection.", client_addr);
                             DISCONNECTION_COUNT_TOTAL
@@ -172,7 +170,7 @@ fn main() {
 // The difficulty there would be reassembling the stream, and we wouldn't
 // easily able to track connections that have already been established.
 //
-fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io::Result<()> {
+fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Option<Tracer>) -> std::io::Result<()> {
     const CLIENT: Token = Token(1);
     const SERVER: Token = Token(2);
 
@@ -205,7 +203,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
 
     let mut done = false;
     let client_addr = format_client_address(&client_stream.peer_addr()?);
-    let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string());
+    let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), tracer);
 
     while !done {
         debug!("Polling");

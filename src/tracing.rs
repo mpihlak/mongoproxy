@@ -6,44 +6,37 @@ use rustracing::{self,sampler::AllSampler,span::SpanContext,carrier::ExtractFrom
 use rustracing_jaeger::{Tracer,reporter::JaegerCompactReporter};
 
 
-lazy_static! {
+// Initialize the tracer and start the thread that writes the spans to Jaeger.
+// The tracer then needs to be cloned and passed to each thread.
+pub fn init_tracer(enable_tracer: bool, service_name: &str, jaeger_addr: &str) -> Option<Tracer> {
+    if !enable_tracer {
+        info!("Tracing not enabled.");
+        return None;
+    }
 
-    // TODO: This can't be thread safe ... can it
-    static ref GLOBAL_TRACER: Tracer = {
-        let (span_tx, span_rx) = crossbeam_channel::unbounded();
-
-        let reporter = JaegerCompactReporter::new("mongoproxy").unwrap();
-
-        thread::spawn(move || {
-            for span in span_rx {
-                info!("# SPAN: {:?}", span);
-                match reporter.report(&[span]) {
-                    Ok(_) => {
-                        info!("Sent to collector");
-                    },
-                    Err(e) => {
-                        warn!("Failed to report span: {}", e);
-                    },
-                }
-            }
-        });
-
-        // TODO: make the sampling strategy configurable.
-        Tracer::with_sender(AllSampler, span_tx)
-    };
-}
-
-// Initialize the global tracer and start the thread that writes the spans to Jaeger
-pub fn initialize(service_name: &str, jaeger_addr: &str) {
     info!("Initializing tracer with service name {}, agent address: {}",
         service_name, jaeger_addr);
 
-    // TODO: Actually initialize the global tracer
-}
+    let (span_tx, span_rx) = crossbeam_channel::unbounded();
+    let service_name = service_name.to_owned();
 
-pub fn global_tracer() -> Option<&'static Tracer> {
-    lazy_static::initialize(&GLOBAL_TRACER);
-    Some(&GLOBAL_TRACER)
+    thread::spawn(move || {
+        let reporter = JaegerCompactReporter::new(&service_name).unwrap();
+
+        for span in span_rx {
+            info!("# SPAN: {:?}", span);
+            match reporter.report(&[span]) {
+                Ok(_) => {
+                    info!("Sent to collector");
+                },
+                Err(e) => {
+                    warn!("Failed to report span: {}", e);
+                },
+            }
+        }
+    });
+
+    Some(Tracer::with_sender(AllSampler, span_tx))
 }
 
 // Extract the span from a text map

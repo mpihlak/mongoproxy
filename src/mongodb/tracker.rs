@@ -11,6 +11,8 @@ use prometheus::{Counter,CounterVec,HistogramVec,GaugeVec};
 use rustracing::span::Span;
 use rustracing::tag::Tag;
 use rustracing_jaeger::span::{SpanContextState};
+use rustracing_jaeger::{Tracer};
+
 
 lazy_static! {
     static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
@@ -93,7 +95,7 @@ struct ClientRequest {
 }
 
 impl ClientRequest {
-    fn from(client_addr: &str, server_addr: &str, app_name: &str, msg: MongoMessage) -> Self {
+    fn from(tracker: &MongoStatsTracker, msg: MongoMessage) -> Self {
         let message_time = Instant::now();
         let mut op = String::from("");
         let mut db = String::from("");
@@ -140,13 +142,13 @@ impl ClientRequest {
                         match tracing::extract_from_text(comm) {
                             Ok(Some(parent_span)) => {
                                 debug!("Extracted trace header: {:?}", parent_span);
-                                if let Some(tracer) = tracing::global_tracer() {
+                                if let Some(tracer) = &tracker.tracer {
                                     span = tracer
                                         .span(op.to_owned())
                                         .child_of(&parent_span)
-                                        .tag(Tag::new("appName", app_name.to_owned()))
-                                        .tag(Tag::new("client", client_addr.to_owned()))
-                                        .tag(Tag::new("server", server_addr.to_owned()))
+                                        .tag(Tag::new("appName", tracker.client_application.clone()))
+                                        .tag(Tag::new("client", tracker.client_addr.clone()))
+                                        .tag(Tag::new("server", tracker.server_addr.clone()))
                                         .tag(Tag::new("collection", coll.to_owned()))
                                         .tag(Tag::new("db", db.to_owned()))
                                         .start();
@@ -203,10 +205,11 @@ pub struct MongoStatsTracker {
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
+    tracer:                 Option<Tracer>,
 }
 
 impl MongoStatsTracker{
-    pub fn new(client_addr: &str, server_addr: &str) -> Self {
+    pub fn new(client_addr: &str, server_addr: &str, tracer: Option<Tracer>) -> Self {
         MongoStatsTracker {
             client: MongoProtocolParser::new(),
             server: MongoProtocolParser::new(),
@@ -214,6 +217,7 @@ impl MongoStatsTracker{
             server_addr: server_addr.to_string(),
             client_request_map: HashMap::new(),
             client_application: String::from(""),
+            tracer,
         }
     }
 
@@ -251,7 +255,7 @@ impl MongoStatsTracker{
             // So that we're adding entries until the buffer is full and then start
             // replacing older entries. For lookup we'd just scan the whole buffer,
             // and probably be still better off than with a HashMap, if the buf is small.
-            let req = ClientRequest::from(&self.client_addr, &self.server_addr, &self.client_application, msg);
+            let req = ClientRequest::from(&self, msg);
             self.client_request_map.insert(hdr.request_id, req);
         }
     }
