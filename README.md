@@ -6,7 +6,8 @@ It does not meddle with the traffic, but passes bytes between the application an
 ## Current state
 Mostly works -- rarely crashes and does collect useful metrics. Performance is acceptable -- sacrifice a millisecond or two in exchange of metrics. Runs a thread per-connection, so may run into trouble with large number of connections.
 
-Jaeger tracing is very experimental. I've seen it work. Here's a screenshot.
+Jaeger tracing is very experimental, but I've seen it work. Here's a screenshot.
+![Trace example](https://github.com/mpihlak/mongoproxy/blob/master/img/trace.png)
 
 ## Usage
 
@@ -21,6 +22,11 @@ mongoproxy \
 This will proxy all requests on port `27113` to a MongoDb instance running on `localhost:27017`. Jaeger tracing is enabled and the spans will be sent to collector on `localhost:6831`. 
 
 More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or `debug`. Add `RUST_BACKTRACE=1` for troubleshooting those (rare) crashes.
+
+## Tracing
+Mongoproxy will not create tracing spans unless the application explicitly requests it. The application does this by passing the trace id in the `$comment` field of the MongoDb query. So, for example if a `find` operation has `uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1` in the comment, the proxy picks this up and will create a child span for the `find` operation. Like this:
+
+
 
 ## Metrics
 
@@ -40,4 +46,3 @@ Connection counters
 * `mongoproxy_client_connection_errors_total`
 
 Per connection metrics are labeled with "client" (IP).
-* mongoproxy_client_bytes_received_total
