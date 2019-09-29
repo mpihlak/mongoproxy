@@ -24,7 +24,7 @@ if __name__ == "__main__":
 
     tracer = config.initialize_tracer()
 
-    con = pymongo.MongoClient("mongodb://localhost:27113/?appName=tracing_client")
+    con = pymongo.MongoClient("mongodb://localhost:27111/?appName=tracing_client")
     bigcollection = con['test']['bigcollection']
 
     def span_as_text(span):
