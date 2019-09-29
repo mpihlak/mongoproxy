@@ -105,7 +105,7 @@ fn main() {
     let service_name = matches.value_of("service_name").unwrap_or(SERVICE_NAME);
 
     let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
-    let jaeger_addr = matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR);
+    let jaeger_addr = lookup_address(matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR)).unwrap();
 
     // TODO: Validate the server address to prevent stupid typos. However
     // this would also prevent startup on random DNS timeouts.
@@ -119,7 +119,7 @@ fn main() {
     start_admin_listener(admin_addr);
     info!("Admin endpoint at http://{}", admin_addr);
 
-    let tracer = tracing::init_tracer(enable_jaeger, &service_name, &jaeger_addr);
+    let tracer = tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr);
 
     for stream in listener.incoming() {
         match stream {
