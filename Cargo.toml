@@ -20,3 +20,6 @@ hyper-router = "^0.5"
 prometheus = '0.7'
 lazy_static = '1.4'
 clap = '2.33'
+crossbeam-channel = '0.3'
+rustracing = '0.2'
+rustracing_jaeger = '0.2'

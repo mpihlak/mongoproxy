@@ -1,11 +1,14 @@
 use super::messages::{MsgHeader,MongoMessage};
 use super::parser::MongoProtocolParser;
+use crate::tracing;
+
 use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
 use log::{debug,info,warn};
 use prometheus::{Counter,CounterVec,HistogramVec,GaugeVec};
-
+use rustracing::span::{Span};
+use rustracing_jaeger::span::{SpanContextState};
 
 lazy_static! {
     static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
@@ -84,6 +87,7 @@ struct ClientRequest {
     op: String,
     db: String,
     coll: String,
+    _span: Span<SpanContextState>,
 }
 
 impl ClientRequest {
@@ -92,6 +96,7 @@ impl ClientRequest {
         let mut op = String::from("");
         let mut db = String::from("");
         let mut coll = String::from("");
+        let mut span = Span::inactive();
 
         match msg {
             MongoMessage::Msg(m) => {
@@ -121,6 +126,14 @@ impl ClientRequest {
                     if let Ok(have_db) = s.get_str("$db") {
                         db = have_db.to_string();
                     }
+                    if let Ok(comm) = s.get_str("comment") {
+                        if let Ok(Some(parent_span)) = tracing::extract_from_text(comm) {
+                            span = tracing::global_tracer()
+                                .span(op.to_owned())
+                                .child_of(&parent_span)
+                                .start();
+                        }
+                    }
                 }
             },
             MongoMessage::Query(m) => {
@@ -145,6 +158,7 @@ impl ClientRequest {
             db,
             op,
             message_time,
+            _span: span,
         }
     }
 
@@ -234,6 +248,9 @@ impl MongoStatsTracker{
 
             if let Some(client_request) = self.client_request_map.remove(&hdr.response_to) {
                 self.observe_server_response_to(&hdr, msg, &client_request);
+                // If the client_request had a span, it will be automatically sent down the
+                // channel here.
+                // TODO: Add any tags and log before that happens.
             } else {
                 RESPONSE_TO_REQUEST_MISMATCH.inc();
                 warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);

@@ -23,7 +23,7 @@ extern crate lazy_static;
 extern crate clap;
 
 mod mongodb;
-
+mod tracing;
 use mongodb::tracker::{MongoStatsTracker};
 
 const SERVER_ADDR: &str = "127.0.0.1:27017";
