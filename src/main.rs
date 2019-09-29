@@ -149,11 +149,6 @@ fn main() {
 // easily able to track connections that have already been established.
 //
 fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io::Result<()> {
-    let client_addr = format_client_address(&client_stream.peer_addr()?);
-
-    let mut done = false;
-    let mut tracker = MongoStatsTracker::new(&client_addr);
-
     const CLIENT: Token = Token(1);
     const SERVER: Token = Token(2);
 
@@ -183,6 +178,10 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream) -> std::io
 
     poll.register(&client_stream, CLIENT, Ready::readable() | Ready::writable(),
         PollOpt::edge()).unwrap();
+
+    let mut done = false;
+    let client_addr = format_client_address(&client_stream.peer_addr()?);
+    let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string());
 
     while !done {
         debug!("Polling");

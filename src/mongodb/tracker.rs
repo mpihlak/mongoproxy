@@ -93,7 +93,7 @@ struct ClientRequest {
 }
 
 impl ClientRequest {
-    fn from(client_addr: &str, app_name: &str, msg: MongoMessage) -> Self {
+    fn from(client_addr: &str, server_addr: &str, app_name: &str, msg: MongoMessage) -> Self {
         let message_time = Instant::now();
         let mut op = String::from("");
         let mut db = String::from("");
@@ -146,11 +146,10 @@ impl ClientRequest {
                                     .child_of(&parent_span)
                                     .tag(Tag::new("appName", app_name.to_owned()))
                                     .tag(Tag::new("client", client_addr.to_owned()))
+                                    .tag(Tag::new("server", server_addr.to_owned()))
                                     .tag(Tag::new("collection", coll.to_owned()))
                                     .tag(Tag::new("db", db.to_owned()))
                                     .start();
-
-                                // TODO: Add server address tag
                             },
                             other => {
                                 debug!("No trace id found in the comment: {:?}", other);
@@ -199,17 +198,19 @@ impl ClientRequest {
 pub struct MongoStatsTracker {
     client:                 MongoProtocolParser,
     server:                 MongoProtocolParser,
+    server_addr:            String,
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
 }
 
 impl MongoStatsTracker{
-    pub fn new(client_addr: &str) -> Self {
+    pub fn new(client_addr: &str, server_addr: &str) -> Self {
         MongoStatsTracker {
             client: MongoProtocolParser::new(),
             server: MongoProtocolParser::new(),
             client_addr: client_addr.to_string(),
+            server_addr: server_addr.to_string(),
             client_request_map: HashMap::new(),
             client_application: String::from(""),
         }
@@ -249,7 +250,7 @@ impl MongoStatsTracker{
             // So that we're adding entries until the buffer is full and then start
             // replacing older entries. For lookup we'd just scan the whole buffer,
             // and probably be still better off than with a HashMap, if the buf is small.
-            let req = ClientRequest::from(&self.client_addr, &self.client_application, msg);
+            let req = ClientRequest::from(&self.client_addr, &self.server_addr, &self.client_application, msg);
             self.client_request_map.insert(hdr.request_id, req);
         }
     }
