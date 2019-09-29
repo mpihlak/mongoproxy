@@ -129,6 +129,14 @@ impl ClientRequest {
                         db = have_db.to_string();
                     }
                     if let Ok(comm) = s.get_str("comment") {
+                        // TODO: Some operations only set $comment field in the request
+                        // document. Handle these as well.
+                        //
+                        // Examples:
+                        // { q: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, limit: 0 }
+                        // { q: { a: 1, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, u: { _id: ObjectId("5d85ee8fe937b3fc0c8c59a1") }, multi: false, upsert: false }
+                        // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "Don't allow negative inputs." } }, { $group: { _id: { $mod: ["$x", 2] }, total: { $sum: "$x" } } }], cursor: {}, lsid: { id: BinData(4, 0x9475c2aa25ef4fa2b9c8ea1fdfe26e11) }, $db: "test" }
+                        // { count: "kala", query: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, fields: {}, lsid: { id: BinData(4, 0xcb2088547ee247ec90c1562f21fef0a1) }, $db: "test" }
                         debug!("Have a comment field: {}", comm);
                         match tracing::extract_from_text(comm) {
                             Ok(Some(parent_span)) => {
