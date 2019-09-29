@@ -1,7 +1,8 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage,OpCode};
 use std::io::{self,Read};
+use std::{thread};
 use log::{debug,warn,error};
-use prometheus::{CounterVec,Histogram};
+use prometheus::{CounterVec,GaugeVec};
 
 
 lazy_static! {
@@ -29,11 +30,11 @@ lazy_static! {
             "Message body parse errors",
             &["error"]).unwrap();
 
-    static ref PARSER_BUFFER_SIZE: Histogram =
-        register_histogram!(
-            "mongoproxy_parser_buffer_size",
-            "Internal parser buffer size distribution",
-            vec![1024.0, 16384.0, 131_072.0, 524_288.0, 1_048_576.0, 10_485_760.0]).unwrap();
+    static ref THREAD_MESSAGE_BUF_SIZE: GaugeVec =
+        register_gauge_vec!(
+            "mongoproxy_parser_buf_size",
+            "Current size of the parser buffer",
+            &["thread"]).unwrap();
 }
 
 pub struct MongoProtocolParser {
@@ -78,7 +79,9 @@ impl MongoProtocolParser {
         }
 
         self.message_buf.extend(buf);
-        PARSER_BUFFER_SIZE.observe(self.message_buf.capacity() as f64);
+        THREAD_MESSAGE_BUF_SIZE
+            .with_label_values(&[&format!("{:?}", thread::current().id())])
+            .set(self.message_buf.capacity() as f64);
 
         let mut result = Vec::new();
         let mut work_buf = &self.message_buf[self.message_buf_pos..];
