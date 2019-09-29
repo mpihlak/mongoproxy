@@ -131,8 +131,9 @@ impl ClientRequest {
                         db = have_db.to_string();
                     }
                     if let Ok(comm) = s.get_str("comment") {
+                        // TODO: Make sure we don't start multiple spans here.
                         // TODO: Some operations only set $comment field in the request
-                        // document. Handle these as well.
+                        // document (count, update, remove). Handle these as well.
                         //
                         // Examples:
                         // { q: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, limit: 0 }
