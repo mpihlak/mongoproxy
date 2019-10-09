@@ -123,11 +123,18 @@ fn parse_document<R: Read>(
         let prefix_name = format!("{}/{}", prefix, elem_name);
         let prefix_pos = format!("{}/@{}", prefix, position);
 
-        let want_field_name_by_pos = format!("{}/#{}", prefix, position);
-
         // Check if we just want the element name
+        let want_field_name_by_pos = format!("{}/#{}", prefix, position);
         if let Some(item_key) = selector.get(&want_field_name_by_pos) {
             doc.insert(item_key.to_string(), BsonValue::String(elem_name.to_string()));
+        }
+
+        // Check if we just want the count of keys (i.e array len)
+        // Take a simple approach and just set the array len to current position
+        // we end up updating it for every value, but the benefit is simplicity.
+        let want_array_len = format!("{}/[]", prefix);
+        if let Some(item_key) = selector.get(&want_array_len) {
+            doc.insert(item_key.to_string(), BsonValue::Int32(position as i32));
         }
 
         // See if any of the wanted elements matches either name or position at current level
@@ -156,6 +163,7 @@ fn parse_document<R: Read>(
                 parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
                 // For now, don't collect the whole subdocument. Instead have the user
                 // explicitly pick out any fields from there with a FieldSelector.
+                // TODO: What if we need array length?
                 BsonValue::None
             },
             0x05 => {
@@ -337,12 +345,14 @@ mod tests {
 
         let selector = FieldSelector::build()
             .with("first", "/@1")
+            .with("first_elem_name", "/#1")
             .with("e", "/eee")
             .with("puu", "/nested/ahv");
         println!("matching fields: {:?}", selector);
         let doc = decode_document(&buf[..], &selector).unwrap();
 
-        assert_eq!(3, doc.len());
+        assert_eq!(4, doc.len());
+        assert_eq!("kala", doc.get_str("first_elem_name").unwrap());
         assert_eq!("maja", doc.get_str("first").unwrap());
         assert_eq!(2.7, doc.get_float("e").unwrap());
 
@@ -368,12 +378,14 @@ mod tests {
 
         let selector = FieldSelector::build()
             .with("first", "/@1")
+            .with("array_len", "/array/[]")
             .with("last", "/last");
         println!("matching fields: {:?}", selector);
 
         let doc = decode_document(&buf[..], &selector).unwrap();
 
         assert_eq!("foo", doc.get_str("first").unwrap());
+        assert_eq!(2, doc.get_i32("array_len").unwrap());
         assert_eq!(2.7, doc.get_float("last").unwrap());
     }
 }
