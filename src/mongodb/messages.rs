@@ -1,12 +1,32 @@
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{self, Read, Write, Error, ErrorKind};
+use std::collections::HashMap;
 use bson::{decode_document};
 use std::fmt;
 use log::{warn,debug};
 use num_derive::FromPrimitive;
 
+use crate::bson_lite::FieldSelector;
 
 pub const HEADER_LENGTH: usize = 16;
+
+
+lazy_static! {
+    static ref MONGO_BSON_FIELD_SELECTOR: FieldSelector<'static> =
+        FieldSelector::build()
+            .with("op", "/#1")
+            .with("collection", "/@1")
+            .with("db", "/$db")
+            .with("comment", "/comment")
+            .with("comment", "/q/$comment")
+            .with("comment", "/query/$comment")
+            .with("app_name", "/client/application/name")
+            .with("docs_returned", "/cursor/firstBatch/...")    // array length
+            .with("docs_returned", "/cursor/nextBatch/...")     // array length
+            .with("n", "n")
+            .with("n_modified", "nModified")
+            ;
+}
 
 #[derive(Debug)]
 #[derive(FromPrimitive)]
