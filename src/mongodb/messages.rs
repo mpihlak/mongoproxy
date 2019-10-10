@@ -1,6 +1,5 @@
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{self, Read, Write, Error, ErrorKind};
-use bson::{decode_document};
 use std::fmt;
 use log::{warn,debug};
 use num_derive::FromPrimitive;
@@ -13,9 +12,10 @@ pub const HEADER_LENGTH: usize = 16;
 lazy_static! {
     static ref MONGO_BSON_FIELD_SELECTOR: FieldSelector<'static> =
         FieldSelector::build()
-            .with("op", "/#1")                                  // first field name
-            .with("collection", "/@1")                          // first field value
+            .with("op", "/#1")                                // first field name
+            .with("op_value", "/@1")                          // first field value
             .with("db", "/$db")
+            .with("collection", "/collection")
             // TODO: Some operations only set $comment field in the request
             // document (count, update, remove). Handle these as well.
             //
@@ -203,7 +203,7 @@ pub struct MsgOpQuery {
     pub full_collection_name: String,
     number_to_skip: i32,
     number_to_return: i32,
-    pub query: bson::Document,
+    pub query: BsonLiteDocument,
     // There's also optional "returnFieldsSelector" but we ignore it
 }
 
@@ -211,7 +211,7 @@ impl fmt::Display for MsgOpQuery {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}",
                self.flags, self.full_collection_name, self.number_to_skip, self.number_to_return)?;
-        writeln!(f, "query: {}", self.query)
+        writeln!(f, "query: {:?}", self.query)
     }
 }
 
@@ -221,7 +221,7 @@ impl MsgOpQuery {
         let full_collection_name = read_c_string(&mut rdr)?;
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
         let number_to_return = rdr.read_i32::<LittleEndian>()?;
-        let query = match decode_document(&mut rdr) {
+        let query = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
@@ -233,8 +233,8 @@ impl MsgOpQuery {
 pub struct MsgOpUpdate {
     pub full_collection_name: String,
     flags: u32,
-    selector: bson::Document,
-    update: bson::Document,
+    selector: BsonLiteDocument,
+    update: BsonLiteDocument,
 }
 
 impl fmt::Display for MsgOpUpdate {
@@ -249,11 +249,11 @@ impl MsgOpUpdate {
         let _zero = rdr.read_u32::<LittleEndian>()?;
         let full_collection_name = read_c_string(&mut rdr)?;
         let flags = rdr.read_u32::<LittleEndian>()?;
-        let selector = match decode_document(&mut rdr) {
+        let selector = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
-        let update = match decode_document(&mut rdr) {
+        let update = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
@@ -265,7 +265,7 @@ impl MsgOpUpdate {
 pub struct MsgOpDelete {
     pub full_collection_name: String,
     flags: u32,
-    selector: bson::Document,
+    selector: BsonLiteDocument,
 }
 
 impl fmt::Display for MsgOpDelete {
@@ -280,7 +280,7 @@ impl MsgOpDelete {
         let _zero = rdr.read_u32::<LittleEndian>()?;
         let full_collection_name = read_c_string(&mut rdr)?;
         let flags = rdr.read_u32::<LittleEndian>()?;
-        let selector = match decode_document(&mut rdr) {
+        let selector = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
@@ -316,7 +316,7 @@ pub struct MsgOpReply {
     cursor_id:              u64,
     starting_from:          u32,
     pub number_returned:    u32,
-    pub documents:          Vec<bson::Document>,
+    pub documents:          Vec<BsonLiteDocument>,
 }
 
 impl fmt::Display for MsgOpReply {
@@ -324,7 +324,7 @@ impl fmt::Display for MsgOpReply {
         writeln!(f, "OP_REPLY flags: {}, cursor_id: {}, starting_from: {}, number_returned: {}",
                self.flags, self.cursor_id, self.starting_from, self.number_returned)?;
         for (i, v)  in self.documents.iter().enumerate() {
-            writeln!(f, "document {}: {}", i, v)?;
+            writeln!(f, "document {}: {:?}", i, v)?;
         }
         Ok(())
     }
@@ -337,7 +337,7 @@ impl MsgOpReply {
         let starting_from = rdr.read_u32::<LittleEndian>()?;
         let number_returned = rdr.read_u32::<LittleEndian>()?;
         let mut documents = Vec::new();
-        while let Ok(doc) = decode_document(&mut rdr) {
+        while let Ok(doc) = bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
             documents.push(doc);
         }
         Ok(MsgOpReply{flags, cursor_id, starting_from, number_returned, documents})

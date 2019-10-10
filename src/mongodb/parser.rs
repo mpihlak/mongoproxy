@@ -246,7 +246,7 @@ mod tests {
                 assert_eq!(h.request_id, 1234);
                 assert_eq!(h.response_to, 5678);
                 assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
-                assert_eq!(m.documents[0].get_str("collection").unwrap(), "foo");
+                assert_eq!(m.documents[0].get_str("op_value").unwrap(), "foo");
             },
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
         }
@@ -295,7 +295,7 @@ mod tests {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
-                assert_eq!(m.documents[0].get_str("collection").unwrap(), "foo");
+                assert_eq!(m.documents[0].get_str("op_value").unwrap(), "foo");
             },
             other => panic!("Couldn't parse the first message, got something else: {:?}", other),
         }
@@ -320,7 +320,7 @@ mod tests {
                 assert_eq!(h.request_id, 5678);
                 assert_eq!(h.response_to, 1234);
                 assert_eq!(m.documents[0].get_str("op").unwrap(), "delete");
-                assert_eq!(m.documents[0].get_str("collection").unwrap(), "bar");
+                assert_eq!(m.documents[0].get_str("op_value").unwrap(), "bar");
             },
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
         }
@@ -359,7 +359,7 @@ mod tests {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
-                assert_eq!(m.documents[0].get_str("collection").unwrap(), "foo");
+                assert_eq!(m.documents[0].get_str("op_value").unwrap(), "foo");
             },
             other => panic!("Couldn't parse the first message, got something else: {:?}", other),
         }
@@ -369,7 +369,7 @@ mod tests {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(m.documents[0].get_str("op").unwrap(), "delete");
-                assert_eq!(m.documents[0].get_str("collection").unwrap(), "bar");
+                assert_eq!(m.documents[0].get_str("op_value").unwrap(), "bar");
             },
             other => panic!("Couldn't parse the second message, got something else: {:?}", other),
         }
