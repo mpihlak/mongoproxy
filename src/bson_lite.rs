@@ -50,10 +50,10 @@ pub enum BsonValue {
     None,
 }
 
+#[derive(Debug)]
 pub struct BsonLiteDocument {
     doc:    HashMap<String, BsonValue>,
 }
-//type BsonLiteDocument = HashMap<String, BsonValue>;
 
 impl BsonLiteDocument {
     fn new() -> Self {
@@ -62,7 +62,7 @@ impl BsonLiteDocument {
         }
     }
 
-    fn get_str(&self, key: &str) -> Option<String> {
+    pub fn get_str(&self, key: &str) -> Option<String> {
         if let Some(s) = self.doc.get(key) {
             if let BsonValue::String(result) = s {
                 return Some(result.clone())
@@ -71,7 +71,8 @@ impl BsonLiteDocument {
         None
     }
 
-    fn get_float(&self, key: &str) -> Option<f64> {
+    #[allow(dead_code)]
+    pub fn get_float(&self, key: &str) -> Option<f64> {
         if let Some(s) = self.doc.get(key) {
             if let BsonValue::Float(result) = s {
                 return Some(*result)
@@ -80,7 +81,7 @@ impl BsonLiteDocument {
         None
     }
 
-    fn get_i32(&self, key: &str) -> Option<i32> {
+    pub fn get_i32(&self, key: &str) -> Option<i32> {
         if let Some(s) = self.doc.get(key) {
             if let BsonValue::Int32(result) = s {
                 return Some(*result)
@@ -89,10 +90,15 @@ impl BsonLiteDocument {
         None
     }
 
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.doc.contains_key(key)
+    }
+
     fn insert(&mut self, key: String, value: BsonValue) {
         self.doc.insert(key, value);
     }
 
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.doc.len()
     }
