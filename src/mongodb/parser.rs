@@ -197,14 +197,16 @@ mod tests {
     }
 
     fn create_message(key: &str, val: &str) -> Vec<u8> {
-        let mut msg = MsgOpMsg{ flag_bits: 0, documents: Vec::new() };
-        let mut doc = bson::Document::new();
-        doc.insert(key.to_owned(), bson::Bson::String(val.to_owned()));
-        msg.documents.push(doc);
+        let msg = MsgOpMsg{ flag_bits: 0, documents: Vec::new() };
 
+        let mut doc = bson::Document::new();
         let mut doc_buf = Vec::new();
-        msg.write(&mut doc_buf).unwrap();
-        doc_buf
+        doc.insert(key.to_owned(), bson::Bson::String(val.to_owned()));
+        bson::encode_document(&mut doc_buf, &doc).unwrap();
+
+        let mut buf = Vec::new();
+        msg.write(&mut buf, &doc_buf).unwrap();
+        buf
     }
 
     #[test]
@@ -243,7 +245,8 @@ mod tests {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(h.request_id, 1234);
                 assert_eq!(h.response_to, 5678);
-                assert_eq!(m.documents[0].get_str("insert").unwrap(), "foo");
+                assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
+                assert_eq!(m.documents[0].get_str("collection").unwrap(), "foo");
             },
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
         }
@@ -291,7 +294,8 @@ mod tests {
         match parser.parse_buffer(&buf).iter().next().unwrap() {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
-                assert_eq!(m.documents[0].get_str("insert").unwrap(), "foo");
+                assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
+                assert_eq!(m.documents[0].get_str("collection").unwrap(), "foo");
             },
             other => panic!("Couldn't parse the first message, got something else: {:?}", other),
         }
@@ -315,7 +319,8 @@ mod tests {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(h.request_id, 5678);
                 assert_eq!(h.response_to, 1234);
-                assert_eq!(m.documents[0].get_str("delete").unwrap(), "bar");
+                assert_eq!(m.documents[0].get_str("op").unwrap(), "delete");
+                assert_eq!(m.documents[0].get_str("collection").unwrap(), "bar");
             },
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
         }
@@ -353,7 +358,8 @@ mod tests {
         match it.next().unwrap() {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
-                assert_eq!(m.documents[0].get_str("insert").unwrap(), "foo");
+                assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
+                assert_eq!(m.documents[0].get_str("collection").unwrap(), "foo");
             },
             other => panic!("Couldn't parse the first message, got something else: {:?}", other),
         }
@@ -362,7 +368,8 @@ mod tests {
         match it.next().unwrap() {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
-                assert_eq!(m.documents[0].get_str("delete").unwrap(), "bar");
+                assert_eq!(m.documents[0].get_str("op").unwrap(), "delete");
+                assert_eq!(m.documents[0].get_str("collection").unwrap(), "bar");
             },
             other => panic!("Couldn't parse the second message, got something else: {:?}", other),
         }

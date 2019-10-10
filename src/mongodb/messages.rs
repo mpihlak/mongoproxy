@@ -1,12 +1,11 @@
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{self, Read, Write, Error, ErrorKind};
-use std::collections::HashMap;
 use bson::{decode_document};
 use std::fmt;
 use log::{warn,debug};
 use num_derive::FromPrimitive;
 
-use crate::bson_lite::FieldSelector;
+use crate::bson_lite::{self,FieldSelector,BsonLiteDocument};
 
 pub const HEADER_LENGTH: usize = 16;
 
@@ -17,6 +16,13 @@ lazy_static! {
             .with("op", "/#1")                                  // first field name
             .with("collection", "/@1")                          // first field value
             .with("db", "/$db")
+            // TODO: Some operations only set $comment field in the request
+            // document (count, update, remove). Handle these as well.
+            //
+            // Examples:
+            // { q: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, limit: 0 }
+            // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "Don't allow negative inputs." } }, { $group: { _id: { $mod: ["$x", 2] }, total: { $sum: "$x" } } }], cursor: {}, lsid: { id: BinData(4, 0x9475c2aa25ef4fa2b9c8ea1fdfe26e11) }, $db: "test" }
+            // { count: "kala", query: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, fields: {}, lsid: { id: BinData(4, 0xcb2088547ee247ec90c1562f21fef0a1) }, $db: "test" }
             .with("comment", "/comment")
             .with("comment", "/q/$comment")
             .with("comment", "/query/$comment")
@@ -111,14 +117,14 @@ impl fmt::Display for MsgHeader {
 #[derive(Debug)]
 pub struct MsgOpMsg {
     pub flag_bits:  u32,
-    pub documents:   Vec<bson::Document>,
+    pub documents:   Vec<BsonLiteDocument>,
 }
 
 impl fmt::Display for MsgOpMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "OP_MSG flags: {}", self.flag_bits)?;
         for (i, v)  in self.documents.iter().enumerate() {
-            writeln!(f, "section {}: {}", i, v)?;
+            writeln!(f, "section {}: {:?}", i, v)?;
         }
         Ok(())
     }
@@ -154,9 +160,9 @@ impl MsgOpMsg {
                 debug!("section_size={}, seq_id={}", section_size, seq_id);
             }
 
-            match decode_document(&mut rdr) {
+            match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
                 Ok(doc) => {
-                    debug!("doc: {}", doc);
+                    debug!("doc: {:?}", doc);
                     documents.push(doc);
                 },
                 Err(e) => {
@@ -173,24 +179,22 @@ impl MsgOpMsg {
     }
 
     #[allow(dead_code)]
-    pub fn write(&self, mut writer: impl Write) -> io::Result<()> {
+    // An incomplete write function for basic testing. Takes a single section
+    // document in the buffer.
+    pub fn write(&self, mut writer: impl Write, doc_buf: &Vec<u8>) -> io::Result<()> {
         writer.write_u32::<LittleEndian>(self.flag_bits)?;
-        for section in self.documents.iter() {
-            let mut buf = Vec::new();
-            bson::encode_document(&mut buf, section).unwrap();
 
-            let seq_id = "documents";
-            let seq_len = 1 + seq_id.len() + buf.len();
+        let seq_id = "documents";
+        let seq_len = 1 + seq_id.len() + doc_buf.len();
 
-            writer.write_u8(1)?;    // "kind" byte
-            writer.write_u32::<LittleEndian>(seq_len as u32)?;
-            writer.write_all(seq_id.as_bytes())?;
-            writer.write_u8(0)?;    // terminator for the cstring
-            writer.write_all(&buf[..])?;
-        }
+        writer.write_u8(1)?;    // "kind" byte
+        writer.write_u32::<LittleEndian>(seq_len as u32)?;
+        writer.write_all(seq_id.as_bytes())?;
+        writer.write_u8(0)?;    // terminator for the cstring
+        writer.write_all(&doc_buf[..])?;
+
         Ok(())
     }
-
 }
 
 #[derive(Debug)]
