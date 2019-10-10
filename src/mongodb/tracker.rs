@@ -111,7 +111,7 @@ impl ClientRequest {
                     if let Some(_op) = s.get_str("op") {
                         op = _op;
                         if MONGODB_COLLECTION_OPS.contains(op.as_str()) {
-                            if let Some(collection) = s.get_str("collection") {
+                            if let Some(collection) = s.get_str("op_Value") {
                                 coll = collection.to_owned();
                             }
                         } else if !IGNORE_MONGODB_OPS.contains(op.as_str()) {
@@ -227,13 +227,10 @@ impl MongoStatsTracker{
             // But sometimes it's called "ismaster" (mongoose) instead of "isMaster" so we need to
             // handle that as well.
             if let MongoMessage::Query(m) = &msg {
-                if self.client_application.is_empty() && m.query.contains_key("isMaster") || m.query.contains_key("ismaster") {
-                    if let Some(bson::Bson::Document(client)) = m.query.get("client") {
-                        if let Some(bson::Bson::Document(application)) = client.get("application") {
-                            if let Ok(name) = application.get_str("name") {
-                                self.client_application = String::from(name);
-                            }
-                        }
+                if self.client_application.is_empty() {
+                    // TODO: Check that th "op" is isMaster
+                    if let Some(app_name) = m.query.get_str("app_name") {
+                        self.client_application = app_name;
                     }
                 }
             }
