@@ -108,39 +108,28 @@ impl ClientRequest {
                 // find an operation that we know. This should be the first key of
                 // the doc so we only look at first key of each section.
                 for s in m.documents.iter() {
-                    for elem in s.iter().take(1) {
-                        // Always track the operation, even if we're unable to get any
-                        // additional details for it.
-                        op = elem.0.as_str().to_owned();
-
-                        if MONGODB_COLLECTION_OPS.contains(elem.0.as_str()) {
-                            if let Some(collection) = elem.1.as_str() {
+                    if let Some(_op) = s.get_str("op") {
+                        op = _op;
+                        if MONGODB_COLLECTION_OPS.contains(op.as_str()) {
+                            if let Some(collection) = s.get_str("collection") {
                                 coll = collection.to_owned();
                             }
-                        } else if !IGNORE_MONGODB_OPS.contains(elem.0.as_str()) {
+                        } else if !IGNORE_MONGODB_OPS.contains(op.as_str()) {
                             // Track all unrecognized ops that we explicitly don't ignore
-                            warn!("unsupported op: {}", elem.0.as_str());
-                            UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&elem.0.as_str()]).inc();
+                            warn!("unsupported op: {}", op);
+                            UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&op.as_str()]).inc();
                         }
                     }
-                    if let Ok(collection) = s.get_str("collection") {
+                    if let Some(collection) = s.get_str("collection") {
                         // getMore has collection as an explicit field, support that
                         coll = collection.to_owned();
                     }
-                    if let Ok(have_db) = s.get_str("$db") {
+                    if let Some(have_db) = s.get_str("$db") {
                         db = have_db.to_string();
                     }
-                    if let Ok(comm) = s.get_str("comment") {
-                        // TODO: Make sure we don't start multiple spans here.
-                        // TODO: Some operations only set $comment field in the request
-                        // document (count, update, remove). Handle these as well.
-                        //
-                        // Examples:
-                        // { q: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, limit: 0 }
-                        // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "Don't allow negative inputs." } }, { $group: { _id: { $mod: ["$x", 2] }, total: { $sum: "$x" } } }], cursor: {}, lsid: { id: BinData(4, 0x9475c2aa25ef4fa2b9c8ea1fdfe26e11) }, $db: "test" }
-                        // { count: "kala", query: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, fields: {}, lsid: { id: BinData(4, 0xcb2088547ee247ec90c1562f21fef0a1) }, $db: "test" }
+                    if let Some(comm) = s.get_str("comment") {
                         debug!("Have a comment field: {}", comm);
-                        match tracing::extract_from_text(comm) {
+                        match tracing::extract_from_text(comm.as_str()) {
                             Ok(Some(parent_span)) => {
                                 debug!("Extracted trace header: {:?}", parent_span);
                                 if let Some(tracer) = &tracker.tracer {
@@ -304,24 +293,14 @@ impl MongoStatsTracker{
             MongoMessage::Msg(m) => {
                 for section in m.documents {
                     // Calculate number of documents returned from cursor response
-                    if let Ok(cursor) = section.get_document("cursor") {
-                        let mut batch_found = false;
-                        for key in ["firstBatch", "nextBatch"].iter() {
-                            if let Ok(batch) = cursor.get_array(key) {
-                                debug!("documents returned={}", batch.len());
-                                client_request.span.set_tag(|| {
-                                    Tag::new("documents_returned", batch.len() as i64)
-                                });
-                                DOCUMENTS_RETURNED_TOTAL
-                                    .with_label_values(&self.label_values(&client_request))
-                                    .observe(batch.len() as f64);
-                                batch_found = true;
-                                break;
-                            }
-                        }
-                        if !batch_found {
-                            warn!("did not find a batch in the response cursor");
-                        }
+                    if let Some(docs_returned) = section.get_i32("docs_returned") {
+                        debug!("documents returned={}", docs_returned);
+                        client_request.span.set_tag(|| {
+                            Tag::new("documents_returned", docs_returned as i64)
+                        });
+                        DOCUMENTS_RETURNED_TOTAL
+                            .with_label_values(&self.label_values(&client_request))
+                            .observe(docs_returned as f64);
                     } else if section.contains_key("n") && client_request.op != "count" {
                         // This should happen in response to insert,update,delete but
                         // don't bother to check.
