@@ -13,6 +13,8 @@ use std::io::{self,Read,Error,ErrorKind};
 use std::collections::HashMap;
 use byteorder::{LittleEndian, ReadBytesExt};
 
+use log::{debug};
+
 
 #[derive(Debug)]
 pub struct FieldSelector<'a> {
@@ -126,6 +128,8 @@ fn parse_document<R: Read>(
 
         let elem_name = read_cstring(&mut rdr)?;
 
+        debug!("elem type=0x{:0x} name={}", elem_type, elem_name);
+
         let prefix_name = format!("{}/{}", prefix, elem_name);
         let prefix_pos = format!("{}/@{}", prefix, position);
 
@@ -166,6 +170,8 @@ fn parse_document<R: Read>(
                 let _doc_len = rdr.read_i32::<LittleEndian>()?;
                 // TODO: Here we could also choose to skip the nested document if none
                 // of it's elements are selected.
+                // XXX: When parsing a nested document we need to deal with the position
+                // restarting from zero. For now just move it forward.
                 parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
                 // For now, don't collect the whole subdocument. Instead have the user
                 // explicitly pick out any fields from there with a FieldSelector.
@@ -189,7 +195,6 @@ fn parse_document<R: Read>(
             },
             0x08 => {
                 // Boolean
-                skip_bytes(&mut rdr, 1)?;
                 let val = match rdr.read_u8()? { 0x00 => false, _ => true };
                 BsonValue::Boolean(val)
             },
@@ -256,11 +261,14 @@ fn parse_document<R: Read>(
                 BsonValue::Placeholder(String::from("TODO: Max key"))
             },
             other => {
-                return Err(Error::new(ErrorKind::Other, format!("unrecognized type: {}", other)));
+                return Err(Error::new(ErrorKind::Other, format!("unrecognized type: 0x{:02x}", other)));
             },
         };
 
+        debug!("elem_value={:?}", elem_value);
+
         if let Some(want_elem) = want_this_key {
+            debug!("want this because: {}", want_elem);
             doc.insert(want_elem.to_string(), elem_value);
         }
     }
@@ -343,6 +351,7 @@ mod tests {
         nested.insert("ahv", bson::Bson::String("Rsk!".to_owned()));
         doc.insert("nested", nested);
 
+        doc.insert("bool".to_owned(), bson::Bson::Boolean(true));
         doc.insert("eee".to_owned(), bson::Bson::FloatingPoint(2.7));
         println!("original: {:?}", doc);
 
@@ -353,11 +362,12 @@ mod tests {
             .with("first", "/@1")
             .with("first_elem_name", "/#1")
             .with("e", "/eee")
+            .with("b", "/bool")
             .with("puu", "/nested/ahv");
         println!("matching fields: {:?}", selector);
         let doc = decode_document(&buf[..], &selector).unwrap();
 
-        assert_eq!(4, doc.len());
+        assert_eq!(5, doc.len());
         assert_eq!("kala", doc.get_str("first_elem_name").unwrap());
         assert_eq!("maja", doc.get_str("first").unwrap());
         assert_eq!(2.7, doc.get_float("e").unwrap());
