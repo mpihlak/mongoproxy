@@ -1,4 +1,4 @@
-/// This is a low overhead BSON parser that only looks at a tiny subset of support
+/// This is a low overhead BSON parser that only looks at a tiny subset of supported
 /// data types. Useful if we only want to collect some metadata about BSON. Eg. what
 /// were the "collection" and "db" of the MongoDb client request.
 ///
@@ -128,7 +128,7 @@ fn parse_document<R: Read>(
 
         let elem_name = read_cstring(&mut rdr)?;
 
-        debug!("elem type=0x{:0x} name={}", elem_type, elem_name);
+        debug!("pos={} elem type=0x{:02x} name={}", position, elem_type, elem_name);
 
         let prefix_name = format!("{}/{}", prefix, elem_name);
         let prefix_pos = format!("{}/@{}", prefix, position);
@@ -136,6 +136,7 @@ fn parse_document<R: Read>(
         // Check if we just want the element name
         let want_field_name_by_pos = format!("{}/#{}", prefix, position);
         if let Some(item_key) = selector.get(&want_field_name_by_pos) {
+            debug!("taking field because {}", want_field_name_by_pos);
             doc.insert(item_key.to_string(), BsonValue::String(elem_name.to_string()));
         }
 
@@ -173,10 +174,9 @@ fn parse_document<R: Read>(
                 // XXX: When parsing a nested document we need to deal with the position
                 // restarting from zero. For now just move it forward.
                 parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
-                // For now, don't collect the whole subdocument. Instead have the user
-                // explicitly pick out any fields from there with a FieldSelector.
-                // TODO: What if we need array length?
-                BsonValue::None
+                // For now, don't collect the whole subdocument and return a placeholder.
+                // Instead have the user explicitly pick out any fields from there with a FieldSelector.
+                BsonValue::Placeholder(String::from("Nested document"))
             },
             0x05 => {
                 // Binary data
@@ -268,7 +268,7 @@ fn parse_document<R: Read>(
         debug!("elem_value={:?}", elem_value);
 
         if let Some(want_elem) = want_this_key {
-            debug!("want this because: {}", want_elem);
+            debug!("want this because: '{}' matches", want_elem);
             doc.insert(want_elem.to_string(), elem_value);
         }
     }
@@ -338,10 +338,13 @@ fn read_string_with_len(rdr: impl Read, str_len: usize) -> io::Result<String> {
 
 mod tests {
     use super::*;
+    use env_logger;
     use bson::{Array,Bson,oid};
 
     #[test]
     fn test_parse() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
         let mut doc = bson::Document::new();
 
         doc.insert("kala".to_owned(), bson::Bson::String("maja".to_owned()));
@@ -377,6 +380,8 @@ mod tests {
 
     #[test]
     fn test_array() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
         let mut doc = bson::Document::new();
 
         doc.insert("first".to_string(), Bson::String("foo".to_string()));
