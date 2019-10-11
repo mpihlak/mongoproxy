@@ -111,7 +111,7 @@ impl ClientRequest {
                     if let Some(_op) = s.get_str("op") {
                         op = _op;
                         if MONGODB_COLLECTION_OPS.contains(op.as_str()) {
-                            if let Some(collection) = s.get_str("op_Value") {
+                            if let Some(collection) = s.get_str("op_value") {
                                 coll = collection.to_owned();
                             }
                         } else if !IGNORE_MONGODB_OPS.contains(op.as_str()) {
@@ -124,7 +124,7 @@ impl ClientRequest {
                         // getMore has collection as an explicit field, support that
                         coll = collection.to_owned();
                     }
-                    if let Some(have_db) = s.get_str("$db") {
+                    if let Some(have_db) = s.get_str("db") {
                         db = have_db.to_string();
                     }
                     if let Some(comm) = s.get_str("comment") {
