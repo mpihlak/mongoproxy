@@ -302,7 +302,7 @@ impl MongoStatsTracker{
                         // This should happen in response to insert,update,delete but
                         // don't bother to check.
                         let num_rows = if client_request.op == "update" {
-                            section.get_i32("nModified").unwrap_or(0)
+                            section.get_i32("n_modified").unwrap_or(0)
                         } else {
                             section.get_i32("n").unwrap_or(0)
                         };
