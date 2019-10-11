@@ -40,7 +40,7 @@ impl <'a>FieldSelector<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum BsonValue {
     Float(f64),
     String(String),
@@ -149,12 +149,7 @@ fn parse_document<R: Read>(
         }
 
         // See if any of the wanted elements matches either name or position at current level
-        let want_this_key = &[&prefix_name, &prefix_pos]
-            .iter()
-            .map(|x| selector.get(x))
-            .filter(|x| x.is_some())
-            .map(|x| x.unwrap())
-            .next();
+        let want_these_keys = &[&prefix_name, &prefix_pos];
 
         let elem_value =  match elem_type {
             0x01 => {
@@ -267,9 +262,11 @@ fn parse_document<R: Read>(
 
         debug!("elem_value={:?}", elem_value);
 
-        if let Some(want_elem) = want_this_key {
-            debug!("want this because: '{}' matches", want_elem);
-            doc.insert(want_elem.to_string(), elem_value);
+        for want_key in want_these_keys {
+            if let Some(elem) = selector.get(want_key) {
+                debug!("want this because: '{}' matches", elem);
+                doc.insert(elem.to_string(), elem_value.clone());
+            }
         }
     }
     Ok(())
