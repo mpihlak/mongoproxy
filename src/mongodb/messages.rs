@@ -29,8 +29,8 @@ lazy_static! {
             .with("app_name", "/client/application/name")
             .with("docs_returned", "/cursor/firstBatch/[]")     // array length
             .with("docs_returned", "/cursor/nextBatch/[]")      // array length
-            .with("n", "n")
-            .with("n_modified", "nModified");
+            .with("n", "/n")
+            .with("n_modified", "/nModified");
 }
 
 #[derive(Debug)]
