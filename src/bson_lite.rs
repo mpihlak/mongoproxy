@@ -194,7 +194,7 @@ fn parse_document<R: Read>(
                 // TODO: Here we could also choose to skip the nested document if none
                 // of it's elements are selected.
                 // XXX: When parsing a nested document we need to deal with the position
-                // restarting from zero. For now just move it forward.
+                // restarting from zero and maybe matching some fields by /@ or /#
                 parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
                 // For now, don't collect the whole subdocument and return a placeholder.
                 // Instead have the user explicitly pick out any fields from there with a FieldSelector.
@@ -223,7 +223,7 @@ fn parse_document<R: Read>(
             0x09 => {
                 // UTC Datetime
                 skip_bytes(&mut rdr, 8)?;
-                BsonValue::Placeholder(String::from("TODO: UTC datetime"))
+                BsonValue::Placeholder(String::from("<UTC datetime>"))
             },
             0x0A => {
                 // Null value
@@ -233,7 +233,7 @@ fn parse_document<R: Read>(
                 // Regular expression
                 let _regx = read_cstring(&mut rdr)?;
                 let _opts = read_cstring(&mut rdr)?;
-                BsonValue::Placeholder(String::from("TODO: Regex"))
+                BsonValue::Placeholder(String::from("<regex>"))
             },
             0x0C => {
                 // DBPointer. Deprecated.
@@ -244,17 +244,18 @@ fn parse_document<R: Read>(
             0x0D => {
                 // Javascript code
                 skip_read_len(&mut rdr)?;
-                BsonValue::Placeholder(String::from("TODO: Javascript"))
+                BsonValue::Placeholder(String::from("<Javascript>"))
             },
             0x0E => {
                 // Symbol. Deprecated.
                 skip_read_len(&mut rdr)?;
-                BsonValue::Placeholder(String::from("TODO: Symbol"))
+                BsonValue::Placeholder(String::from("<symbol>"))
             },
             0x0F => {
                 // Code w/ scope
+                // TODO: Test that this parses properly
                 skip_read_len(&mut rdr)?;
-                BsonValue::Placeholder(String::from("TODO: Code with scope"))
+                BsonValue::Placeholder(String::from("<Javascript with scope>"))
             },
             0x10 => {
                 // Int32
@@ -263,7 +264,7 @@ fn parse_document<R: Read>(
             0x11 => {
                 // Timestamp
                 skip_bytes(&mut rdr, 8)?;
-                BsonValue::Placeholder(String::from("TODO: Timestamp"))
+                BsonValue::Placeholder(String::from("<timestamp>"))
             },
             0x12 => {
                 // Int64
@@ -272,15 +273,15 @@ fn parse_document<R: Read>(
             0x13 => {
                 // Decimal128
                 skip_bytes(&mut rdr, 16)?;
-                BsonValue::Placeholder(String::from("TODO: Decimal128"))
+                BsonValue::Placeholder(String::from("<decimal128>"))
             },
             0xFF => {
                 // Min key.
-                BsonValue::Placeholder(String::from("TODO: Min key"))
+                BsonValue::Placeholder(String::from("<min key>"))
             },
             0x7F => {
                 // Min key.
-                BsonValue::Placeholder(String::from("TODO: Max key"))
+                BsonValue::Placeholder(String::from("<max key>"))
             },
             other => {
                 return Err(Error::new(ErrorKind::Other, format!("unrecognized type: 0x{:02x}", other)));
@@ -301,10 +302,9 @@ fn parse_document<R: Read>(
 
 /// Parse the BSON document, collecting selected fields into a HashMap
 pub fn decode_document(mut rdr: impl Read, selector: &FieldSelector) -> io::Result<BsonLiteDocument> {
-    let mut doc = BsonLiteDocument::new();
-
     let _document_size = rdr.read_i32::<LittleEndian>()?;
 
+    let mut doc = BsonLiteDocument::new();
     parse_document(&mut rdr, &selector, "", 0, &mut doc)?;
 
     Ok(doc)
