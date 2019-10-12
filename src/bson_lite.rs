@@ -198,13 +198,13 @@ fn parse_document<R: Read>(
                 parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
                 // For now, don't collect the whole subdocument and return a placeholder.
                 // Instead have the user explicitly pick out any fields from there with a FieldSelector.
-                BsonValue::Placeholder(String::from("Nested document"))
+                BsonValue::Placeholder(String::from("<nested document>"))
             },
             0x05 => {
                 // Binary data
                 let len = rdr.read_i32::<LittleEndian>()?;
                 skip_bytes(&mut rdr, (len+1) as usize)?;
-                BsonValue::Placeholder(String::from("TODO: binary data"))
+                BsonValue::Placeholder(String::from("<binary data>"))
             },
             0x06 => {
                 // Undefined value. Deprecated.
@@ -227,7 +227,7 @@ fn parse_document<R: Read>(
             },
             0x0A => {
                 // Null value
-                BsonValue::Placeholder(String::from("TODO: NULL"))
+                BsonValue::None
             },
             0x0B => {
                 // Regular expression

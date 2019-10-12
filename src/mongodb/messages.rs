@@ -124,7 +124,7 @@ impl fmt::Display for MsgOpMsg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "OP_MSG flags: {}", self.flag_bits)?;
         for (i, v)  in self.documents.iter().enumerate() {
-            writeln!(f, "section {}: {:?}", i, v)?;
+            writeln!(f, "section {}: {}", i, v)?;
         }
         Ok(())
     }
@@ -162,7 +162,7 @@ impl MsgOpMsg {
 
             match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
                 Ok(doc) => {
-                    debug!("doc: {:?}", doc);
+                    debug!("doc: {}", doc);
                     documents.push(doc);
                 },
                 Err(e) => {
@@ -211,7 +211,7 @@ impl fmt::Display for MsgOpQuery {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "OP_QUERY flags: {}, collection: {}, to_skip: {}, to_return: {}",
                self.flags, self.full_collection_name, self.number_to_skip, self.number_to_return)?;
-        writeln!(f, "query: {:?}", self.query)
+        writeln!(f, "query: {}", self.query)
     }
 }
 
@@ -324,7 +324,7 @@ impl fmt::Display for MsgOpReply {
         writeln!(f, "OP_REPLY flags: {}, cursor_id: {}, starting_from: {}, number_returned: {}",
                self.flags, self.cursor_id, self.starting_from, self.number_returned)?;
         for (i, v)  in self.documents.iter().enumerate() {
-            writeln!(f, "document {}: {:?}", i, v)?;
+            writeln!(f, "document {}: {}", i, v)?;
         }
         Ok(())
     }
