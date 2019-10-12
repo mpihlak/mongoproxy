@@ -174,7 +174,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
     const SERVER: Token = Token(2);
 
     let poll = Poll::new().unwrap();
-    let mut events = Events::with_capacity(1024);
+    let mut events = Events::with_capacity(16);
 
     info!("connecting to server: {}", server_addr);
     let timer = SERVER_CONNECT_TIME_SECONDS.with_label_values(&[server_addr]).start_timer();
