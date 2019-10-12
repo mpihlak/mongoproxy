@@ -4,7 +4,7 @@ use crate::tracing;
 
 use std::time::{Instant};
 use std::{thread};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet,VecDeque};
 use log::{debug,info,warn};
 use prometheus::{Counter,CounterVec,HistogramVec};
 
@@ -13,6 +13,8 @@ use rustracing::tag::Tag;
 use rustracing_jaeger::span::{SpanContextState};
 use rustracing_jaeger::{Tracer};
 
+
+const REQUEST_MAP_SIZE: usize = 10;
 
 lazy_static! {
     static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
@@ -81,6 +83,7 @@ lazy_static! {
 // Stripped down version of the client request. We need this mostly for timing
 // stats and metric labels.
 struct ClientRequest {
+    request_id: u32,
     message_time: Instant,
     op: String,
     db: String,
@@ -89,7 +92,7 @@ struct ClientRequest {
 }
 
 impl ClientRequest {
-    fn from(tracker: &MongoStatsTracker, msg: MongoMessage) -> Self {
+    fn from(tracker: &MongoStatsTracker, request_id: u32, msg: MongoMessage) -> Self {
         let message_time = Instant::now();
         let mut op = String::from("");
         let mut db = String::from("");
@@ -163,6 +166,7 @@ impl ClientRequest {
         }
 
         ClientRequest {
+            request_id,
             coll,
             db,
             op,
@@ -188,7 +192,7 @@ pub struct MongoStatsTracker {
     server_addr:            String,
     client_addr:            String,
     client_application:     String,
-    client_request_map:     HashMap<u32, ClientRequest>,
+    client_request_map:     VecDeque<ClientRequest>,
     tracer:                 Option<Tracer>,
 }
 
@@ -199,7 +203,7 @@ impl MongoStatsTracker{
             server: MongoProtocolParser::new(),
             client_addr: client_addr.to_string(),
             server_addr: server_addr.to_string(),
-            client_request_map: HashMap::new(),
+            client_request_map: VecDeque::with_capacity(REQUEST_MAP_SIZE),
             client_application: String::from(""),
             tracer,
         }
@@ -229,15 +233,16 @@ impl MongoStatsTracker{
                 }
             }
 
-            // We're always removing these entries if we get a server response to
-            // the request. TODO: But what if some requests never get a response ...
-            //
-            // A a better approach would be to use a small circular buffer,
-            // So that we're adding entries until the buffer is full and then start
-            // replacing older entries. For lookup we'd just scan the whole buffer,
-            // and probably be still better off than with a HashMap, if the buf is small.
-            let req = ClientRequest::from(&self, msg);
-            self.client_request_map.insert(hdr.request_id, req);
+            let req = ClientRequest::from(&self, hdr.request_id, msg);
+
+            // Keep the request mapping buffer tiny, with newest entries
+            // at the front. We rarely expect more than 1 entry here, but
+            // sometimes it does happen.
+            if self.client_request_map.len() >= REQUEST_MAP_SIZE {
+                self.client_request_map.pop_back();
+            }
+
+            self.client_request_map.push_front(req);
         }
     }
 
@@ -252,10 +257,13 @@ impl MongoStatsTracker{
         for (hdr, msg) in self.server.parse_buffer(buf) {
             info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
-            if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
+            // Find the matching client request to the server response and collect the metrics.
+            // The request is removed from the map since we don't ever expect multiple responses
+            // to a request. As it goes out of scope here, any spans it has will be sent down
+            // the channel to the collector.
+            if let Some(pos) = self.client_request_map.iter().position(|x| x.request_id == hdr.response_to) {
+                let mut client_request = self.client_request_map.remove(pos).unwrap();
                 self.observe_server_response_to(&hdr, msg, &mut client_request);
-                // If the client_request had a span, it will be automatically sent down the
-                // channel as it goes out of scope here.
             } else {
                 RESPONSE_TO_REQUEST_MISMATCH.inc();
                 warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);
