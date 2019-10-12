@@ -23,11 +23,10 @@ extern crate prometheus;
 extern crate lazy_static;
 #[macro_use]
 extern crate clap;
+extern crate mongoproxy;
 
-mod mongodb;
-mod tracing;
-mod bson_lite;
-use mongodb::tracker::{MongoStatsTracker};
+use mongoproxy::tracing;
+use mongoproxy::mongodb::tracker::{MongoStatsTracker};
 
 const SERVER_ADDR: &str = "127.0.0.1:27017";
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
