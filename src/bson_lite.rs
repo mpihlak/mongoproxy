@@ -9,6 +9,7 @@
 /// Returns a HashMap of BsonValue, keyed by the field name. If the same field exists
 /// multiple times, the value that is encountered last is used.
 
+use std::fmt;
 use std::io::{self,Read,Error,ErrorKind};
 use std::collections::HashMap;
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -52,9 +53,35 @@ pub enum BsonValue {
     None,
 }
 
+impl fmt::Display for BsonValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            BsonValue::Float(v) => v.fmt(f),
+            BsonValue::String(v) => write!(f, "\"{}\"", v),
+            BsonValue::Int32(v) => v.fmt(f),
+            BsonValue::Int64(v) => v.fmt(f),
+            BsonValue::ObjectId(v) => write!(f, "ObjectId({:?})", v),
+            BsonValue::Boolean(v) => v.fmt(f),
+            BsonValue::Placeholder(v) => v.fmt(f),
+            other => write!(f, "Other({:?})", other)
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct BsonLiteDocument {
     doc:    HashMap<String, BsonValue>,
+}
+
+impl fmt::Display for BsonLiteDocument {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{{ ")?;
+        for (i, (k, v)) in self.doc.iter().enumerate() {
+            let comma = if i == self.doc.len() - 1 { "" } else { "," };
+            write!(f, "{}: {}{} ", k, v, comma)?;
+        }
+        write!(f, "}}")
+    }
 }
 
 impl BsonLiteDocument {
@@ -353,7 +380,7 @@ mod tests {
 
         doc.insert("bool".to_owned(), bson::Bson::Boolean(true));
         doc.insert("eee".to_owned(), bson::Bson::FloatingPoint(2.7));
-        println!("original: {:?}", doc);
+        println!("original: {}", doc);
 
         let mut buf = Vec::new();
         bson::encode_document(&mut buf, &doc).unwrap();
@@ -366,6 +393,7 @@ mod tests {
             .with("puu", "/nested/ahv");
         println!("matching fields: {:?}", selector);
         let doc = decode_document(&buf[..], &selector).unwrap();
+        println!("decoded: {}", doc);
 
         assert_eq!(5, doc.len());
         assert_eq!("kala", doc.get_str("first_elem_name").unwrap());
@@ -392,7 +420,7 @@ mod tests {
 
         let mut buf = Vec::new();
         bson::encode_document(&mut buf, &doc).unwrap();
-        println!("original: {:?}", &doc);
+        println!("original: {}", &doc);
 
         let selector = FieldSelector::build()
             .with("first", "/@1")
@@ -401,6 +429,7 @@ mod tests {
         println!("matching fields: {:?}", selector);
 
         let doc = decode_document(&buf[..], &selector).unwrap();
+        println!("decoded: {}", &doc);
 
         assert_eq!("foo", doc.get_str("first").unwrap());
         assert_eq!(2, doc.get_i32("array_len").unwrap());
