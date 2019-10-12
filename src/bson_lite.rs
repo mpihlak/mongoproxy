@@ -190,14 +190,10 @@ fn parse_document<R: Read>(
             },
             0x03 | 0x04 => {
                 // Embedded document or an array. Both are represented as a document.
-                let _doc_len = rdr.read_i32::<LittleEndian>()?;
                 // TODO: Here we could also choose to skip the nested document if none
                 // of it's elements are selected.
-                // XXX: When parsing a nested document we need to deal with the position
-                // restarting from zero and maybe matching some fields by /@ or /#
+                let _doc_len = rdr.read_i32::<LittleEndian>()?;
                 parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
-                // For now, don't collect the whole subdocument and return a placeholder.
-                // Instead have the user explicitly pick out any fields from there with a FieldSelector.
                 BsonValue::Placeholder(String::from("<nested document>"))
             },
             0x05 => {
@@ -311,7 +307,6 @@ pub fn decode_document(mut rdr: impl Read, selector: &FieldSelector) -> io::Resu
 }
 
 fn skip_bytes<T: Read>(rdr: &mut T, skip_bytes: usize) -> io::Result<()> {
-    // TODO: Seek instead of looping
     for byte in rdr.take(skip_bytes as u64).bytes() {
         if let Err(e) = byte {
             return Err(e);
