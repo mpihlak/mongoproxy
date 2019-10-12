@@ -134,9 +134,10 @@ impl MongoProtocolParser {
                 self.message_buf.len(), self.message_buf.capacity());
             self.message_buf_pos = 0;
 
-            // Create a new Vec to get rid of any allocated memory.
-            // TODO: Benchmark if this is actually better than clearing the Vec.
-            self.message_buf = Vec::new();
+            // Clear the message buf, now that we have consumed all that we want from it.
+            // This has slightly better performance than allocating a new Vector and reduces
+            // fragmentation from constantly allocating and deallocating large chunks.
+            self.message_buf.clear();
         }
 
         result
