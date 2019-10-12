@@ -6,7 +6,7 @@ use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
 use log::{debug,info,warn};
-use prometheus::{Counter,CounterVec,HistogramVec,GaugeVec};
+use prometheus::{Counter,CounterVec,HistogramVec};
 
 use rustracing::span::Span;
 use rustracing::tag::Tag;
@@ -21,12 +21,6 @@ lazy_static! {
             "Number of unrecognized op names in MongoDb response",
             &["op"]).unwrap();
 
-    static ref REQUEST_MATCH_HASHMAP_SIZE: GaugeVec =
-        register_gauge_vec!(
-            "mongoproxy_request_match_hashmap_size",
-            "Number of current keys in the request/response mapping HashMap",
-            &["thread"]).unwrap();
-
     static ref RESPONSE_TO_REQUEST_MISMATCH: Counter =
         register_counter!(
             "mongoproxy_response_to_request_id_mismatch",
@@ -37,28 +31,28 @@ lazy_static! {
         register_histogram_vec!(
             "mongoproxy_response_first_byte_latency_seconds",
             "Backend response latency to first byte",
-            &["client", "app", "op", "collection", "db"],
+            &["app", "op", "collection", "db"],
             vec![0.001, 0.01, 0.1, 0.5, 1.0, 10.0]).unwrap();
 
     static ref DOCUMENTS_RETURNED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_returned_total",
             "Number of documents returned in the response",
-            &["client", "app", "op", "collection", "db"],
+            &["app", "op", "collection", "db"],
             vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100_000.0 ]).unwrap();
 
     static ref DOCUMENTS_CHANGED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_changed_total",
             "Number of documents matched by insert, update or delete operations",
-            &["client", "app", "op", "collection", "db"],
+            &["app", "op", "collection", "db"],
             vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100_000.0 ]).unwrap();
 
     static ref SERVER_RESPONSE_SIZE_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_server_response_bytes_total",
             "Size of the server response",
-            &["client", "app", "op", "collection", "db"],
+            &["app", "op", "collection", "db"],
             vec![128.0, 1024.0, 16384.0, 131_072.0, 1_048_576.0]).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
@@ -247,8 +241,8 @@ impl MongoStatsTracker{
         }
     }
 
-    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 5] {
-        [ &self.client_addr, &self.client_application, &req.op, &req.coll, &req.db]
+    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 4] {
+        [ &self.client_application, &req.op, &req.coll, &req.db]
     }
 
     pub fn track_server_response(&mut self, buf: &[u8]) {
@@ -257,10 +251,6 @@ impl MongoStatsTracker{
 
         for (hdr, msg) in self.server.parse_buffer(buf) {
             info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
-
-            REQUEST_MATCH_HASHMAP_SIZE
-                .with_label_values(&[&format!("{:?}", thread::current().id())])
-                .set(self.client_request_map.len() as f64);
 
             if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
                 self.observe_server_response_to(&hdr, msg, &mut client_request);
