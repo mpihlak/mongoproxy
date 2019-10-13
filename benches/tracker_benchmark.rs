@@ -19,6 +19,10 @@ fn create_message(op: &str, op_value: &str, mut buf: impl Write) {
     let mut doc = bson::Document::new();
     doc.insert(op.to_string(), bson::Bson::String(op_value.to_string()));
 
+    // Add some meat to the request
+    let comment_text = "X".repeat(4096);
+    doc.insert("comment".to_string(), bson::Bson::String(comment_text));
+
     let mut doc_buf = Vec::new();
     bson::encode_document(&mut doc_buf, &doc).unwrap();
     let mut msg_buf = Vec::new();
