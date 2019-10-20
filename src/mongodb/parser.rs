@@ -36,6 +36,7 @@ lazy_static! {
             vec![1000.0, 10000.0, 100_000.0, 1_000_000.0, 10_000_000.0]).unwrap();
 }
 
+#[derive(Default)]
 pub struct MongoProtocolParser {
     pub header:         messages::MsgHeader,
     have_header:        bool,
