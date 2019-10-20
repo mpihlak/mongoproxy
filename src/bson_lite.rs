@@ -1,12 +1,12 @@
-/// This is a low overhead BSON parser that only looks at a tiny subset of supported
-/// data types. Useful if we only want to collect some metadata about BSON. Eg. what
-/// were the "collection" and "db" of the MongoDb client request.
+/// A low overhead BSON parser that only looks at documen fields that are explicitly selected.
+/// Useful if we only want to collect some metadata about BSON. Eg. what were the "collection" and
+/// "db" of the MongoDb client request.
 ///
-/// It works by letting the caller specify a FieldSelector, indicating which fields
+/// It works by having the caller specify a `FieldSelector`, indicating which fields
 /// need to be collected. The parser then goes through the BSON, skipping unneeded
-/// fields and collecting what needs to be collected.
+/// fields and collecting what was asked of it.
 ///
-/// Returns a HashMap of BsonValue, keyed by the field name. If the same field exists
+/// Returns a `HashMap` of `BsonValue`, keyed by the field name. If the same field exists
 /// multiple times, the value that is encountered last is used.
 
 use std::fmt;
