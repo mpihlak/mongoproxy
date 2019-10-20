@@ -223,6 +223,7 @@ impl MongoStatsTracker{
             if let MongoMessage::Query(m) = &msg {
                 if self.client_application.is_empty() {
                     // TODO: Check that th "op" is isMaster
+                    // TODO: Track connections by app_name
                     if let Some(app_name) = m.query.get_str("app_name") {
                         self.client_application = app_name;
                     }
