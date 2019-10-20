@@ -4,29 +4,22 @@ use std::{thread, time, str};
 
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
-use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
-use clap::{Arg, App};
-
+use prometheus::{CounterVec,HistogramVec,GaugeVec,Encoder,TextEncoder};
+use clap::{Arg, App, crate_version};
 use hyper::{Request, Response, Body, header::CONTENT_TYPE};
 use hyper::server::Server;
 use hyper::rt::Future;
 use hyper_router::{Route, RouterBuilder, RouterService};
-
 use rustracing_jaeger::{Tracer};
-
 use log::{info,warn,error,debug};
 use env_logger;
+use lazy_static::lazy_static;
 
-#[macro_use]
-extern crate prometheus;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate clap;
-extern crate mongoproxy;
+#[macro_use] extern crate prometheus;
 
 use mongoproxy::tracing;
 use mongoproxy::mongodb::tracker::{MongoStatsTracker};
+
 
 const SERVER_ADDR: &str = "127.0.0.1:27017";
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
@@ -236,6 +229,8 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
             }
         }
     }
+
+    // TODO: Clean up the tracker, count disconnections by app_name
 
     Ok(())
 }
