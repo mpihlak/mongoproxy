@@ -1,10 +1,11 @@
 use std::net::{TcpListener,SocketAddr,ToSocketAddrs};
 use std::io::{self, Read, Write};
 use std::{thread, time, str};
+use std::time::{Duration,Instant};
 
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
-use prometheus::{CounterVec,HistogramVec,GaugeVec,Encoder,TextEncoder};
+use prometheus::{CounterVec,GaugeVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
 use hyper::{Request, Response, Body, header::CONTENT_TYPE};
 use hyper::server::Server;
@@ -51,6 +52,19 @@ lazy_static! {
             "mongoproxy_server_connect_time_seconds",
             "Time it takes to look up and connect to a server",
             &["server_addr"]).unwrap();
+
+    static ref CLIENT_CONNECT_TIME_SECONDS: GaugeVec =
+        register_gauge_vec!(
+            "mongoproxy_client_connect_time_seconds",
+            "How long has this client been connected",
+            &["client"]).unwrap();
+
+    static ref CLIENT_IDLE_TIME_SECONDS: HistogramVec =
+        register_histogram_vec!(
+            "mongoproxy_client_idle_time_seconds",
+            "How long has this connection been idle",
+            &["client"],
+            vec![1.0, 60.0, 600.0, 3600.0, 86400.0]).unwrap();
 
 }
 
@@ -193,13 +207,17 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
         PollOpt::edge()).unwrap();
 
     let mut done = false;
+    let client_addr_with_port = &client_stream.peer_addr()?.to_string();
     let client_addr = format_client_address(&client_stream.peer_addr()?);
     let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), tracer);
+    let connection_time_start = Instant::now();
 
     while !done {
-        debug!("Polling");
-        poll.poll(&mut events, None).unwrap();
-        debug!("poll done");
+        poll.poll(&mut events, Some(Duration::from_millis(1000))).unwrap();
+
+        CLIENT_CONNECT_TIME_SECONDS
+            .with_label_values(&[&client_addr_with_port])
+            .set(connection_time_start.elapsed().as_secs() as f64);
 
         for event in events.iter() {
             match event.token() {
@@ -230,7 +248,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
         }
     }
 
-    // TODO: Clean up the tracker, count disconnections by app_name
+    // TODO: Count disconnections by app_name
 
     Ok(())
 }
