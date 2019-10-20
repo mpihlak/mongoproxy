@@ -71,7 +71,7 @@ impl fmt::Display for MongoMessage {
     }
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,Default)]
 pub struct MsgHeader {
     pub message_length: usize,
     pub request_id:     u32,
@@ -181,7 +181,7 @@ impl MsgOpMsg {
     #[allow(dead_code)]
     // An incomplete write function for basic testing. Takes a single section
     // document in the buffer.
-    pub fn write(&self, mut writer: impl Write, doc_buf: &Vec<u8>) -> io::Result<()> {
+    pub fn write(&self, mut writer: impl Write, doc_buf: &[u8]) -> io::Result<()> {
         writer.write_u32::<LittleEndian>(self.flag_bits)?;
 
         let seq_id = "documents";
