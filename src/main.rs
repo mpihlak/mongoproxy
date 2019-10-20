@@ -59,12 +59,11 @@ lazy_static! {
             "How long has this client been connected",
             &["client"]).unwrap();
 
-    static ref CLIENT_IDLE_TIME_SECONDS: HistogramVec =
-        register_histogram_vec!(
+    static ref CLIENT_IDLE_TIME_SECONDS: GaugeVec =
+        register_gauge_vec!(
             "mongoproxy_client_idle_time_seconds",
             "How long has this connection been idle",
-            &["client"],
-            vec![1.0, 60.0, 600.0, 3600.0, 86400.0]).unwrap();
+            &["client"]).unwrap();
 
 }
 
@@ -211,6 +210,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
     let client_addr = format_client_address(&client_stream.peer_addr()?);
     let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), tracer);
     let connection_time_start = Instant::now();
+    let mut connection_idle_start = connection_time_start;
 
     while !done {
         poll.poll(&mut events, Some(Duration::from_millis(1000))).unwrap();
@@ -219,10 +219,12 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
             .with_label_values(&[&client_addr_with_port])
             .set(connection_time_start.elapsed().as_secs() as f64);
 
+        let mut connection_was_idle = true;
         for event in events.iter() {
             match event.token() {
                 CLIENT => {
                     debug!("Reading from client");
+                    connection_was_idle = false;
                     let mut track_client = |buf: &[u8]| {
                         tracker.track_client_request(buf);
                     };
@@ -234,6 +236,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
                 },
                 SERVER => {
                     debug!("Reading from server");
+                    connection_was_idle = false;
                     let mut track_server = |buf: &[u8]| {
                         tracker.track_server_response(buf);
                     };
@@ -245,6 +248,14 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
                 },
                 _ => {}
             }
+        }
+
+        if connection_was_idle {
+            CLIENT_IDLE_TIME_SECONDS
+                .with_label_values(&[&client_addr_with_port])
+                .set(connection_idle_start.elapsed().as_secs() as f64);
+        } else {
+            connection_idle_start = Instant::now();
         }
     }
 
