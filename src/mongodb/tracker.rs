@@ -273,11 +273,9 @@ impl MongoStatsTracker{
     }
 
     fn observe_server_response_to(&self, hdr: &MsgHeader, msg: MongoMessage, client_request: &mut ClientRequest) {
-        let time_to_response = client_request.message_time.elapsed().as_millis();
-
         SERVER_RESPONSE_FIRST_BYTE_SECONDS
             .with_label_values(&self.label_values(&client_request))
-            .observe(time_to_response as f64 / 1000.0);
+            .observe(client_request.message_time.elapsed().as_secs_f64());
         SERVER_RESPONSE_SIZE_TOTAL
             .with_label_values(&self.label_values(&client_request))
             .observe(hdr.message_length as f64);
