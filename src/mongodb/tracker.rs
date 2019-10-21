@@ -25,7 +25,7 @@ lazy_static! {
         register_counter_vec!(
             "mongoproxy_app_disconnections_total",
             "Total number of client disconnections",
-            &["client"]).unwrap();
+            &["app"]).unwrap();
 
     static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
         register_counter_vec!(
