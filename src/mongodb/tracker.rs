@@ -15,6 +15,18 @@ use rustracing_jaeger::{Tracer};
 
 
 lazy_static! {
+    static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_app_connections_established_total",
+            "Total number of client connections established",
+            &["app"]).unwrap();
+
+    static ref APP_DISCONNECTION_COUNT_TOTAL: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_app_disconnections_total",
+            "Total number of client disconnections",
+            &["client"]).unwrap();
+
     static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
         register_counter_vec!(
             "mongoproxy_unsupported_op_name_count_total",
@@ -192,6 +204,16 @@ pub struct MongoStatsTracker {
     tracer:                 Option<Tracer>,
 }
 
+impl Drop for MongoStatsTracker {
+    fn drop(&mut self) {
+        if !self.client_application.is_empty() {
+            APP_DISCONNECTION_COUNT_TOTAL
+                .with_label_values(&[&self.client_application])
+                .inc();
+        }
+    }
+}
+
 impl MongoStatsTracker{
     pub fn new(client_addr: &str, server_addr: &str, tracer: Option<Tracer>) -> Self {
         MongoStatsTracker {
@@ -212,31 +234,17 @@ impl MongoStatsTracker{
         for (hdr, msg) in self.client.parse_buffer(buf) {
             info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
-            // For isMaster requests we  make an attempt to obtain connection metadata
-            // from the payload. This will be sent on the first isMaster request and
-            // contains a document such as this:
-            // { isMaster: 1, client: { application: { name: "kala" },
-            //   driver: { name: "MongoDB Internal Client", version: "4.0.2" },
-            //   os: { type: "Darwin", name: "Mac OS X", architecture: "x86_64", version: "18.7.0" } } }
-            // But sometimes it's called "ismaster" (mongoose) instead of "isMaster" so we need to
-            // handle that as well.
-            if let MongoMessage::Query(m) = &msg {
-                if self.client_application.is_empty() {
-                    // TODO: Check that th "op" is isMaster
-                    // TODO: Track connections by app_name
-                    if let Some(app_name) = m.query.get_str("app_name") {
-                        self.client_application = app_name;
-                    }
+            if self.client_application.is_empty() {
+                if let Some(app_name) = extract_app_name(&msg) {
+                    self.client_application = app_name;
+                    APP_CONNECTION_COUNT_TOTAL
+                        .with_label_values(&[&self.client_application])
+                        .inc();
                 }
             }
 
-            // We're always removing these entries if we get a server response to
-            // the request. TODO: But what if some requests never get a response ...
-            //
-            // A a better approach would be to use a small circular buffer,
-            // So that we're adding entries until the buffer is full and then start
-            // replacing older entries. For lookup we'd just scan the whole buffer,
-            // and probably be still better off than with a HashMap, if the buf is small.
+            // Keep the client request so that we can keep track to which request
+            // a server response belongs to.
             let req = ClientRequest::from(&self, msg);
             self.client_request_map.insert(hdr.request_id, req);
         }
@@ -319,4 +327,16 @@ impl MongoStatsTracker{
             },
         }
     }
+}
+
+/// Extract `appname` from MongoDb `isMaster` query
+fn extract_app_name(msg: &MongoMessage) -> Option<String> {
+    if let MongoMessage::Query(m) = msg {
+        if let Some(op) = m.query.get_str("op") {
+            if op == "isMaster" || op == "ismaster" {
+                return m.query.get_str("app_name");
+            }
+        }
+    }
+    None
 }
