@@ -16,20 +16,24 @@ lazy_static! {
             .with("op_value", "/@1")                          // first field value
             .with("db", "/$db")
             .with("collection", "/collection")
-            // TODO: Some operations only set $comment field in the request
-            // document (count, update, remove). Handle these as well.
-            //
+            .with("ok", "/ok")
+            // TODO: Some operations only set $comment field in the request document (count, update, remove).
             // Examples:
             // { q: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, limit: 0 }
-            // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "Don't allow negative inputs." } }, { $group: { _id: { $mod: ["$x", 2] }, total: { $sum: "$x" } } }], cursor: {}, lsid: { id: BinData(4, 0x9475c2aa25ef4fa2b9c8ea1fdfe26e11) }, $db: "test" }
-            // { count: "kala", query: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, fields: {}, lsid: { id: BinData(4, 0xcb2088547ee247ec90c1562f21fef0a1) }, $db: "test" }
+            // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "Don't allow negative inputs." } ...
+            // { count: "kala", query: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, ...
             .with("comment", "/comment")
             .with("comment", "/q/$comment")
             .with("comment", "/query/$comment")
+            // The first isMaster response also contains connection metadata, we want the appname from there:
+            // { isMaster: 1, client: { application: { name: "kala" },
+            //   driver: { name: "MongoDB Internal Client", version: "4.0.2" },
+            //   os: { type: "Darwin", name: "Mac OS X", architecture: "x86_64", version: "18.7.0" } } }
             .with("app_name", "/client/application/name")
             .with("docs_returned", "/cursor/firstBatch/[]")     // array length
             .with("docs_returned", "/cursor/nextBatch/[]")      // array length
             .with("n", "/n")
+            .with("n", "/lastErrorObject/n")                    // findAndModify returns this
             .with("n_modified", "/nModified");
 }
 
