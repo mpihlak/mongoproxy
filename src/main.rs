@@ -5,7 +5,7 @@ use std::time::{Duration,Instant};
 
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
-use prometheus::{CounterVec,GaugeVec,HistogramVec,Encoder,TextEncoder};
+use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
 use hyper::{Request, Response, Body, header::CONTENT_TYPE};
 use hyper::server::Server;
@@ -53,14 +53,14 @@ lazy_static! {
             "Time it takes to look up and connect to a server",
             &["server_addr"]).unwrap();
 
-    static ref CLIENT_CONNECT_TIME_SECONDS: GaugeVec =
-        register_gauge_vec!(
+    static ref CLIENT_CONNECT_TIME_SECONDS: CounterVec =
+        register_counter_vec!(
             "mongoproxy_client_connect_time_seconds",
             "How long has this client been connected",
             &["client"]).unwrap();
 
-    static ref CLIENT_IDLE_TIME_SECONDS: GaugeVec =
-        register_gauge_vec!(
+    static ref CLIENT_IDLE_TIME_SECONDS: CounterVec =
+        register_counter_vec!(
             "mongoproxy_client_idle_time_seconds",
             "How long has this connection been idle",
             &["client"]).unwrap();
@@ -206,18 +206,13 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
         PollOpt::edge()).unwrap();
 
     let mut done = false;
-    let client_addr_with_port = &client_stream.peer_addr()?.to_string();
     let client_addr = format_client_address(&client_stream.peer_addr()?);
     let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), tracer);
-    let connection_time_start = Instant::now();
-    let mut connection_idle_start = connection_time_start;
+    let mut last_time = Instant::now();
 
     while !done {
         poll.poll(&mut events, Some(Duration::from_millis(1000))).unwrap();
-
-        CLIENT_CONNECT_TIME_SECONDS
-            .with_label_values(&[&client_addr_with_port])
-            .set(connection_time_start.elapsed().as_secs() as f64);
+        debug!("Poll done.");
 
         let mut connection_was_idle = true;
         for event in events.iter() {
@@ -250,16 +245,21 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
             }
         }
 
+        let now = Instant::now();
+        let duration = now.duration_since(last_time).as_secs_f64();
+
+        CLIENT_CONNECT_TIME_SECONDS
+            .with_label_values(&[&client_addr])
+            .inc_by(duration);
+
         if connection_was_idle {
             CLIENT_IDLE_TIME_SECONDS
-                .with_label_values(&[&client_addr_with_port])
-                .set(connection_idle_start.elapsed().as_secs() as f64);
-        } else {
-            connection_idle_start = Instant::now();
+                .with_label_values(&[&client_addr])
+                .inc_by(duration);
         }
-    }
 
-    // TODO: Count disconnections by app_name
+        last_time = now;
+    }
 
     Ok(())
 }
