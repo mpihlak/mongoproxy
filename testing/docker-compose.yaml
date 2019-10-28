@@ -6,8 +6,8 @@ services:
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info
-    command: ./mongoproxy --hostport mongodb:27017 --enable-jaeger --jaeger-addr jaeger:6831
-    #command: ./mongoproxy --hostport mongodb-global.sandbox.int.starship.xyz:27017 --enable-jaeger --jaeger-addr jaeger:6831
+    command: ./mongoproxy --proxy 27111:mongodb:27017 --enable-jaeger --jaeger-addr jaeger:6831
+    #command: ./mongoproxy --proxy 27111:mongodb-global.sandbox.int.starship.xyz:27017 --enable-jaeger --jaeger-addr jaeger:6831
     ports:
       - "9898:9898"
       - "27111:27111"

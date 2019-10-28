@@ -1,5 +1,6 @@
 use std::net::{TcpListener,SocketAddr,ToSocketAddrs};
 use std::io::{self, Read, Write};
+use std::error::{Error};
 use std::{thread, time, str};
 use std::time::{Duration,Instant};
 
@@ -22,10 +23,8 @@ use mongoproxy::tracing;
 use mongoproxy::mongodb::tracker::{MongoStatsTracker};
 
 
-const SERVER_ADDR: &str = "127.0.0.1:27017";
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
-const LISTEN_ADDR: &str = "0.0.0.0:27111";
-const ADMIN_ADDR: &str = "0.0.0.0:9898";
+const ADMIN_PORT: &str = "9898";
 const SERVICE_NAME: &str = "mongoproxy";
 
 lazy_static! {
@@ -67,14 +66,33 @@ lazy_static! {
 
 }
 
+struct ProxyDef {
+    local_addr: String,
+    remote_addr: String,
+}
+
+impl ProxyDef {
+    fn from_str(proxy_def: &str) -> Result<Self, Box<dyn Error>> {
+        if let Some(pos) = proxy_def.find(':') {
+            let (local_port, remote_hostport) = proxy_def.split_at(pos);
+            let local_addr = format!("0.0.0.0:{}", local_port).parse()?;
+            let remote_addr = remote_hostport[1..].to_string();
+            Ok(ProxyDef{ local_addr, remote_addr })
+        } else {
+            Err(From::from("malformed proxy spec"))
+        }
+    }
+}
+
 fn main() {
     let matches = App::new("mongoproxy")
         .version(crate_version!())
         .about("Proxies MongoDb requests to obtain metrics")
-        .arg(Arg::with_name("server_addr")
-            .long("hostport")
-            .value_name("server host:port")
+        .arg(Arg::with_name("proxy")
+            .long("proxy")
+            .value_name("local-port:remote-host:remote-port")
             .help("MongoDb server hostport to proxy to")
+            .multiple(true)
             .takes_value(true)
             .required(true))
         .arg(Arg::with_name("enable_jaeger")
@@ -93,45 +111,52 @@ fn main() {
             .value_name("SERVICE_NAME")
             .help("Service name that will be used in Jaeger traces and metric labels")
             .takes_value(true))
-        .arg(Arg::with_name("listen_addr")
-            .long("listen")
-            .value_name("LISTEN_ADDR")
-            .help(&format!("Hostport where the proxy will listen on ({})", LISTEN_ADDR))
-            .takes_value(true))
-        .arg(Arg::with_name("admin_addr")
-            .long("admin")
-            .value_name("ADMIN_ADDR")
-            .help(&format!("Hostport for admin endpoint ({})", ADMIN_ADDR))
+        .arg(Arg::with_name("admin_port")
+            .long("admin-port")
+            .value_name("ADMIN_PORT")
+            .help(&format!("Hostport for admin endpoint ({})", ADMIN_PORT))
             .takes_value(true))
         .get_matches();
 
-    let server_addr = String::from(matches.value_of("server_addr").unwrap_or(SERVER_ADDR));
-    let listen_addr = matches.value_of("listen_addr").unwrap_or(LISTEN_ADDR);
-    let admin_addr = matches.value_of("admin_addr").unwrap_or(ADMIN_ADDR);
+    let admin_port = matches.value_of("admin_port").unwrap_or(ADMIN_PORT);
+    let admin_addr = format!("0.0.0.0:{}", admin_port);
     let service_name = matches.value_of("service_name").unwrap_or(SERVICE_NAME);
 
     let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
     let jaeger_addr = lookup_address(matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR)).unwrap();
 
-    // TODO: Validate the server address to prevent stupid typos. However
-    // this would also prevent startup on random DNS timeouts.
-
     env_logger::init();
 
-    let listener = TcpListener::bind(listen_addr).unwrap();
-    info!("Listening on {}", listen_addr);
-    info!(" proxying to {}", server_addr);
-
-    start_admin_listener(admin_addr);
+    start_admin_listener(&admin_addr);
     info!("Admin endpoint at http://{}", admin_addr);
 
     let tracer = tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr);
+
+    // Finally, start a listener for each proxy spec on the command line
+    let mut proxy_threads = Vec::new();
+    for proxy_spec in matches.values_of("proxy").unwrap() {
+        let proxy = ProxyDef::from_str(proxy_spec).unwrap();
+        let tracer = tracer.clone();
+
+        proxy_threads.push(thread::spawn(|| {
+            run_proxy(proxy, tracer);
+        }));
+    }
+
+    for t in proxy_threads {
+        let _ = t.join();
+    }
+}
+
+fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>) {
+    let listener = TcpListener::bind(&proxy.local_addr).unwrap();
+    info!("Proxying {} -> {}", proxy.local_addr, proxy.remote_addr);
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let client_addr = format_client_address(&stream.peer_addr().unwrap());
-                let server_addr = server_addr.clone();
+                let server_addr = proxy.remote_addr.to_string();
                 let tracer = tracer.clone();
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
