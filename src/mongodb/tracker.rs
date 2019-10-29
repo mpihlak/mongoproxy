@@ -39,9 +39,9 @@ lazy_static! {
             "Number of occurrences where we don't have a matching client request for the response"
             ).unwrap();
 
-    static ref SERVER_RESPONSE_FIRST_BYTE_SECONDS: HistogramVec =
+    static ref SERVER_RESPONSE_LATENCY_SECONDS: HistogramVec =
         register_histogram_vec!(
-            "mongoproxy_response_first_byte_latency_seconds",
+            "mongoproxy_response_latency_seconds",
             "Backend response latency to first byte",
             &["app", "op", "collection", "db"],
             vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]).unwrap();
@@ -279,7 +279,7 @@ impl MongoStatsTracker{
     }
 
     fn observe_server_response_to(&self, hdr: &MsgHeader, msg: MongoMessage, client_request: &mut ClientRequest) {
-        SERVER_RESPONSE_FIRST_BYTE_SECONDS
+        SERVER_RESPONSE_LATENCY_SECONDS
             .with_label_values(&self.label_values(&client_request))
             .observe(client_request.message_time.elapsed().as_secs_f64());
         SERVER_RESPONSE_SIZE_TOTAL

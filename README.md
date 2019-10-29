@@ -24,7 +24,7 @@ More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or 
 ## Metrics
 
 Per-request histograms:
-* `mongoproxy_response_first_byte_latency_seconds` - Response latency (to be renamed)
+* `mongoproxy_response_latency_seconds` - Response latency
 * `mongoproxy_documents_returned_total` - How many documents were returned.
 * `mongoproxy_documents_changed_total` - How many documents were changed by insert, update or delete.
 * `mongoproxy_server_response_bytes_total` - Response size distribution.
