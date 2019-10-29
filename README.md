@@ -12,8 +12,7 @@ Jaeger tracing is very experimental, but I've seen it work. See below for a scre
 
 ```
 mongoproxy \
-    --listen 0.0.0.0:27113 \
-    --hostport 127.0.0.1:27017 \
+    --proxy 27113:localhost:27017 \
     --service-name mongoproxy-ftw \
     --enable-jaeger \
     --jaeger-addr localhost:6831
