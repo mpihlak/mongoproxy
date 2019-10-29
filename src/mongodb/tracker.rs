@@ -67,6 +67,12 @@ lazy_static! {
             &["app", "op", "collection", "db"],
             vec![128.0, 1024.0, 16384.0, 131_072.0, 1_048_576.0]).unwrap();
 
+    static ref SERVER_RESPONSE_ERRORS_TOTAL: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_server_response_errors_total",
+            "Number of non-ok server responses",
+            &["app", "op", "collection", "db"]).unwrap();
+
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
             "mongoproxy_client_bytes_sent_total",
@@ -286,6 +292,16 @@ impl MongoStatsTracker{
         match msg {
             MongoMessage::Msg(m) => {
                 for section in m.documents {
+                    if let Some(ok) = section.get_float("ok") {
+                        if ok == 0.0 {
+                            client_request.span.set_tag(|| {
+                                Tag::new("error", true)
+                            });
+                            SERVER_RESPONSE_ERRORS_TOTAL
+                                .with_label_values(&self.label_values(&client_request))
+                                .inc();
+                        }
+                    }
                     // Calculate number of documents returned from cursor response
                     if let Some(docs_returned) = section.get_i32("docs_returned") {
                         debug!("documents returned={}", docs_returned);
