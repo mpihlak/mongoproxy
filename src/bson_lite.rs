@@ -306,16 +306,11 @@ pub fn decode_document(mut rdr: impl Read, selector: &FieldSelector) -> io::Resu
     Ok(doc)
 }
 
-fn skip_bytes<T: Read>(rdr: &mut T, skip_bytes: usize) -> io::Result<()> {
-    for byte in rdr.take(skip_bytes as u64).bytes() {
-        if let Err(e) = byte {
-            return Err(e);
-        }
-    }
-    Ok(())
+fn skip_bytes<T: Read>(rdr: &mut T, bytes_to_skip: usize) -> io::Result<u64> {
+    io::copy(&mut rdr.take(bytes_to_skip as u64), &mut io::sink())
 }
 
-fn skip_read_len<T: Read>(rdr: &mut T) -> io::Result<()> {
+fn skip_read_len<T: Read>(rdr: &mut T) -> io::Result<u64> {
     let str_len = rdr.read_i32::<LittleEndian>()?;
     skip_bytes(rdr, str_len as usize)
 }
