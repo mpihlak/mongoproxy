@@ -11,7 +11,7 @@ use mongoproxy::mongodb::messages::{self,MsgHeader,MsgOpMsg};
 use criterion::Criterion;
 
 
-criterion_group!(benches, bench_tracker);
+criterion_group!(benches, bench_tracker, bench_bson_parser);
 criterion_main!(benches);
 
 fn create_message(op: &str, op_value: &str, mut buf: impl Write) {
@@ -66,4 +66,40 @@ fn bench_tracker(c: &mut Criterion) {
             tracker.track_server_response(&server_buf);
         })
     );
+}
+
+use bson::{Array,Bson,oid};
+use mongoproxy::bson_lite::{FieldSelector,decode_document};
+
+fn bench_bson_parser(c: &mut Criterion) {
+    let mut doc = bson::Document::new();
+
+    doc.insert("first".to_string(), Bson::String("foo".to_string()));
+    doc.insert("ignore_this".to_string(), Bson::String("a".repeat(1024)));
+
+    let mut subdoc = bson::Document::new();
+    subdoc.insert("_field1".to_string(), Bson::String("a".repeat(1024)));
+    subdoc.insert("_field2".to_string(), Bson::String("b".repeat(1024)));
+    doc.insert("subdoc".to_string(), subdoc);
+
+    let mut arr = Array::new();
+    arr.push(Bson::String("blah".to_string()));
+    arr.push(Bson::ObjectId(oid::ObjectId::with_bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])));
+
+    doc.insert("array".to_string(), Bson::Array(arr));
+    doc.insert("last".to_owned(), bson::Bson::FloatingPoint(2.7));
+
+    let mut buf = Vec::new();
+    bson::encode_document(&mut buf, &doc).unwrap();
+
+    let selector = FieldSelector::build()
+        .with("first", "/@1")
+        .with("array_len", "/array/[]")
+        .with("last", "/last");
+
+    c.bench_function("parse_bson_message",
+        |b| b.iter(|| {
+            let _doc = decode_document(&buf[..], &selector).unwrap();
+        }
+    ));
 }

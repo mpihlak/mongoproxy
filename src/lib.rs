@@ -4,5 +4,5 @@ extern crate prometheus;
 extern crate lazy_static;
 
 pub mod tracing;
-mod bson_lite;
+pub mod bson_lite;
 pub mod mongodb;
