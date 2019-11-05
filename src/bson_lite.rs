@@ -202,7 +202,7 @@ fn parse_document<R: Read>(
             }
         }
 
-        let want_this_value = wanted_elements.len() > 0;
+        let want_this_value = !wanted_elements.is_empty();
 
         let elem_value =  match elem_type {
             0x01 => {
