@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::io::{self,Read,Error,ErrorKind};
-use std::collections::HashMap;
+use std::collections::{HashMap,HashSet};
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use log::{debug};
@@ -21,23 +21,42 @@ use log::{debug};
 pub struct FieldSelector<'a> {
     // Match labels keyed by the fully qualified element name (/ as separator) or alternatively
     // with the element position (@<position number> instead of name)
-    matchers:   HashMap<&'a str, String>,
+    matchers:       HashMap<&'a str, String>,
+
+    // Map of subdocument prefixes that we are interested in. We're using this to skip
+    // documents that don't contain anything interesting.
+    match_prefixes: HashSet<&'a str>
 }
 
 impl <'a>FieldSelector<'a> {
     pub fn build() -> Self {
         FieldSelector {
             matchers: HashMap::new(),
+            match_prefixes: HashSet::new(),
         }
     }
 
     pub fn with(mut self, match_label: &'a str, match_pattern: &'a str) -> Self {
         self.matchers.insert(match_pattern, match_label.to_owned());
+
+        // Now make a note of all the prefixes leading up to the exact value. So that
+        // encountering /foo/bar/baz we insert /foo/bar/baz, /foo/bar and /foo
+        let mut prefix = match_pattern;
+        while let Some(pos) = prefix.rfind('/') {
+            prefix = &prefix[..pos];
+            if !prefix.is_empty() {
+                self.match_prefixes.insert(prefix);
+            }
+        }
         self
     }
 
     fn get(&self, field: &str) -> Option<&String> {
         self.matchers.get(field)
+    }
+
+    fn want_prefix(&self, prefix: &str) -> bool {
+        self.match_prefixes.contains(prefix)
     }
 }
 
@@ -175,8 +194,15 @@ fn parse_document<R: Read>(
             doc.insert(item_key.to_string(), BsonValue::Int32(position as i32));
         }
 
-        // See if any of the wanted elements matches either name or position at current level
-        let want_these_keys = &[&prefix_name, &prefix_pos];
+        // List of wanted elements. tuple of (name prefix, name alias)
+        let mut wanted_elements = Vec::new();
+        for elem_prefix in [&prefix_name, &prefix_pos].iter() {
+            if let Some(elem_name) = selector.get(elem_prefix) {
+                wanted_elements.push(elem_name);
+            }
+        }
+
+        let want_this_value = !wanted_elements.is_empty();
 
         let elem_value =  match elem_type {
             0x01 => {
@@ -186,15 +212,26 @@ fn parse_document<R: Read>(
             0x02 => {
                 // String
                 let str_len = rdr.read_i32::<LittleEndian>()?;
-                BsonValue::String(read_string_with_len(&mut rdr, str_len as usize)?)
+                if want_this_value {
+                    BsonValue::String(read_string_with_len(&mut rdr, str_len as usize)?)
+                } else {
+                    skip_bytes(&mut rdr, str_len as usize)?;
+                    BsonValue::None
+                }
             },
             0x03 | 0x04 => {
                 // Embedded document or an array. Both are represented as a document.
-                // TODO: Here we could also choose to skip the nested document if none
-                // of it's elements are selected.
+                // We only go through the trouble of parsing this if the field selector
+                // wants the document value or some element within it.
                 let _doc_len = rdr.read_i32::<LittleEndian>()?;
-                parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
-                BsonValue::Placeholder(String::from("<nested document>"))
+                debug!("prefix=[{}] and want_it={}", prefix_name, selector.want_prefix(&prefix_name));
+                if want_this_value || selector.want_prefix(&prefix_name) {
+                    parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
+                    BsonValue::Placeholder(String::from("<nested document>"))
+                } else {
+                    skip_bytes(&mut rdr, _doc_len as usize - 4)?;
+                    BsonValue::None
+                }
             },
             0x05 => {
                 // Binary data
@@ -286,11 +323,9 @@ fn parse_document<R: Read>(
 
         debug!("elem_value={:?}", elem_value);
 
-        for want_key in want_these_keys {
-            if let Some(elem) = selector.get(want_key) {
-                debug!("want this because: '{}' matches", elem);
-                doc.insert(elem.to_string(), elem_value.clone());
-            }
+        for elem_name in wanted_elements.iter() {
+            debug!("want this because: '{}' matches", elem_name);
+            doc.insert(elem_name.to_string(), elem_value.clone());
         }
     }
     Ok(())
@@ -306,16 +341,11 @@ pub fn decode_document(mut rdr: impl Read, selector: &FieldSelector) -> io::Resu
     Ok(doc)
 }
 
-fn skip_bytes<T: Read>(rdr: &mut T, skip_bytes: usize) -> io::Result<()> {
-    for byte in rdr.take(skip_bytes as u64).bytes() {
-        if let Err(e) = byte {
-            return Err(e);
-        }
-    }
-    Ok(())
+fn skip_bytes<T: Read>(rdr: &mut T, bytes_to_skip: usize) -> io::Result<u64> {
+    io::copy(&mut rdr.take(bytes_to_skip as u64), &mut io::sink())
 }
 
-fn skip_read_len<T: Read>(rdr: &mut T) -> io::Result<()> {
+fn skip_read_len<T: Read>(rdr: &mut T) -> io::Result<u64> {
     let str_len = rdr.read_i32::<LittleEndian>()?;
     skip_bytes(rdr, str_len as usize)
 }
@@ -361,7 +391,7 @@ mod tests {
     use bson::{Array,Bson,oid};
 
     #[test]
-    fn test_parse() {
+    fn test_parse_bson() {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let mut doc = bson::Document::new();
@@ -369,9 +399,19 @@ mod tests {
         doc.insert("kala".to_owned(), bson::Bson::String("maja".to_owned()));
         doc.insert("puu".to_owned(), bson::Bson::FloatingPoint(3.14));
 
+        // nested document that we want to look at
         let mut nested = bson::Document::new();
-        nested.insert("ahv", bson::Bson::String("Rsk!".to_owned()));
+        let mut deeply_nested = bson::Document::new();
+        deeply_nested.insert("name", bson::Bson::String("nilsson".to_owned()));
+        nested.insert("monkey", deeply_nested);
         doc.insert("nested", nested);
+
+        // and a nested document that we don't care about
+        let mut nested = bson::Document::new();
+        let mut deeply_nested = bson::Document::new();
+        deeply_nested.insert("name", bson::Bson::String("johnsson".to_owned()));
+        nested.insert("monkey", deeply_nested);
+        doc.insert("nested-ignore", nested);
 
         doc.insert("bool".to_owned(), bson::Bson::Boolean(true));
         doc.insert("eee".to_owned(), bson::Bson::FloatingPoint(2.7));
@@ -385,17 +425,17 @@ mod tests {
             .with("first_elem_name", "/#1")
             .with("e", "/eee")
             .with("b", "/bool")
-            .with("puu", "/nested/ahv");
+            .with("c", "/deeply/nested/array/len/[]")
+            .with("monkey", "/nested/monkey/name");
         println!("matching fields: {:?}", selector);
         let doc = decode_document(&buf[..], &selector).unwrap();
         println!("decoded: {}", doc);
 
-        assert_eq!(5, doc.len());
         assert_eq!("kala", doc.get_str("first_elem_name").unwrap());
         assert_eq!("maja", doc.get_str("first").unwrap());
         assert_eq!(2.7, doc.get_float("e").unwrap());
-
-        assert_eq!("Rsk!", doc.get_str("puu").unwrap());
+        assert_eq!("nilsson", doc.get_str("monkey").unwrap());
+        assert_eq!(5, doc.len());
     }
 
     #[test]
