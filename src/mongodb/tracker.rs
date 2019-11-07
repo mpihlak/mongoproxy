@@ -86,9 +86,9 @@ lazy_static! {
             &["client"]).unwrap();
 
     static ref IGNORE_MONGODB_OPS: HashSet<&'static str> =
-        ["isMaster", "ismaster", "whatsmyuri", "buildInfo", "buildinfo",
+        ["isMaster", "ismaster", "ping", "whatsmyuri", "buildInfo", "buildinfo",
         "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
-        "listDatabases", "listIndexes", "listCollections", "replSetGetStatus",
+        "listDatabases", "listIndexes", "createIndexes", "listCollections", "replSetGetStatus",
         "endSessions", "dropDatabase", "_id", "q"].iter().cloned().collect();
 
     static ref MONGODB_COLLECTION_OPS: HashSet<&'static str> =
