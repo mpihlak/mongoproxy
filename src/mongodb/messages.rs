@@ -44,6 +44,7 @@ pub enum OpCode{
     OpUpdate = 2001,
     OpInsert = 2002,
     OpQuery = 2004,
+    OpGetMore = 2005,
     OpDelete = 2006,
     OpMsg = 2013,
     OpPing = 2010,
@@ -54,6 +55,7 @@ pub enum OpCode{
 pub enum MongoMessage {
     Msg(MsgOpMsg),
     Query(MsgOpQuery),
+    GetMore(MsgOpGetMore),
     Reply(MsgOpReply),
     Update(MsgOpUpdate),
     Delete(MsgOpDelete),
@@ -66,6 +68,7 @@ impl fmt::Display for MongoMessage {
         match self {
             MongoMessage::Msg(m) => m.fmt(f),
             MongoMessage::Query(m) => m.fmt(f),
+            MongoMessage::GetMore(m) => m.fmt(f),
             MongoMessage::Reply(m) => m.fmt(f),
             MongoMessage::Update(m) => m.fmt(f),
             MongoMessage::Delete(m) => m.fmt(f),
@@ -230,6 +233,31 @@ impl MsgOpQuery {
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
         Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return, query})
+    }
+}
+
+#[derive(Debug)]
+pub struct MsgOpGetMore {
+    pub full_collection_name: String,
+    number_to_return: i32,
+    cursor_id: i64,
+}
+
+impl fmt::Display for MsgOpGetMore {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "OP_GET_MORE collection: {}, to_return: {}, cursor_id: {}",
+               self.full_collection_name, self.number_to_return, self.cursor_id)
+    }
+}
+
+impl MsgOpGetMore {
+    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+        let _zero = rdr.read_i32::<LittleEndian>()?;
+        let full_collection_name = read_c_string(&mut rdr)?;
+        let number_to_return = rdr.read_i32::<LittleEndian>()?;
+        let cursor_id = rdr.read_i64::<LittleEndian>()?;
+
+        Ok(MsgOpGetMore{full_collection_name, number_to_return, cursor_id})
     }
 }
 

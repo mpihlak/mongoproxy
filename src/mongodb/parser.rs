@@ -1,4 +1,4 @@
-use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage,OpCode};
+use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpGetMore,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage,OpCode};
 use std::io::{self,Read};
 use log::{debug,warn,error};
 use prometheus::{CounterVec,Histogram};
@@ -154,6 +154,9 @@ fn extract_message(op_code: u32, mut rdr: impl Read) -> io::Result<MongoMessage>
         }
         Some(OpCode::OpQuery) => {
             return Ok(MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr)?));
+        },
+        Some(OpCode::OpGetMore) => {
+            return Ok(MongoMessage::GetMore(MsgOpGetMore::from_reader(&mut rdr)?));
         },
         Some(OpCode::OpUpdate) => {
             return Ok(MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr)?));
