@@ -14,6 +14,10 @@ use rustracing_jaeger::span::{SpanContextState};
 use rustracing_jaeger::{Tracer};
 
 
+// Common labels for all op metrics
+const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db"];
+
+
 lazy_static! {
     static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -43,35 +47,35 @@ lazy_static! {
         register_histogram_vec!(
             "mongoproxy_response_latency_seconds",
             "Backend response latency to first byte",
-            &["app", "op", "collection", "db"],
+            OP_LABELS,
             vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]).unwrap();
 
     static ref DOCUMENTS_RETURNED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_returned_total",
             "Number of documents returned in the response",
-            &["app", "op", "collection", "db"],
+            OP_LABELS,
             vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100_000.0 ]).unwrap();
 
     static ref DOCUMENTS_CHANGED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_changed_total",
             "Number of documents matched by insert, update or delete operations",
-            &["app", "op", "collection", "db"],
+            OP_LABELS,
             vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100_000.0 ]).unwrap();
 
     static ref SERVER_RESPONSE_SIZE_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_server_response_bytes_total",
             "Size of the server response",
-            &["app", "op", "collection", "db"],
+            OP_LABELS,
             vec![128.0, 1024.0, 16384.0, 131_072.0, 1_048_576.0]).unwrap();
 
     static ref SERVER_RESPONSE_ERRORS_TOTAL: CounterVec =
         register_counter_vec!(
             "mongoproxy_server_response_errors_total",
             "Number of non-ok server responses",
-            &["app", "op", "collection", "db"]).unwrap();
+            OP_LABELS).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -256,8 +260,8 @@ impl MongoStatsTracker{
         }
     }
 
-    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 4] {
-        [ &self.client_application, &req.op, &req.coll, &req.db]
+    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 5] {
+        [ &self.client_addr, &self.client_application, &req.op, &req.coll, &req.db]
     }
 
     pub fn track_server_response(&mut self, buf: &[u8]) {
