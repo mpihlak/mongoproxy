@@ -60,5 +60,10 @@ if __name__ == "__main__":
         for i in range(3):
             list(bigcollection.find({}).limit(1000).comment(span_text))
 
+    print("Fetching with invalid span")
+    list(bigcollection.find({}).limit(1000).comment("uber-trace-id"))
+    list(bigcollection.find({}).limit(1000).comment("uber-trace-id:"))
+    list(bigcollection.find({}).limit(1000).comment("uber-trace-id:x"))
+
     time.sleep(2)
     tracer.close()

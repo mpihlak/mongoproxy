@@ -43,6 +43,9 @@ pub fn init_tracer(enable_tracer: bool, service_name: &str, jaeger_addr: SocketA
 }
 
 // Extract the span from a text map
+//
+// This only returns Some if the span is sampled (flag bits 1 & 2 set). Otherwise
+// we just ignore it as not to generate useless orphaned spans.
 pub fn extract_from_text<T>(span_text: &str) -> rustracing::Result<Option<SpanContext<T>>>
     where T: ExtractFromTextMap<HashMap<String,String>>
 {
@@ -50,15 +53,28 @@ pub fn extract_from_text<T>(span_text: &str) -> rustracing::Result<Option<SpanCo
 
     // For now expect that the trace is something like "uber-trace-id:1232132132:323232:1"
     // No spaces, quotation marks or other funny stuff.
+    //
+    // TODO: Can we not look into the trace flags here and handle the trace/no-trace decision
+    // at a higher level ...
     if span_text.starts_with(TRACE_ID_PREFIX) && span_text.len() > TRACE_ID_PREFIX.len() {
-        let mut text_map = HashMap::new();
+        let trace_data = &span_text[TRACE_ID_PREFIX.len()+1..];
+
         debug!("trace-id-prefix: {}", TRACE_ID_PREFIX);
-        debug!("trace-id: {}", &span_text[TRACE_ID_PREFIX.len()+1..]);
-        text_map.insert(
-            TRACE_ID_PREFIX.to_string(),
-            span_text[TRACE_ID_PREFIX.len()+1..].to_string()
-        );
-        SpanContext::extract_from_text_map(&text_map)
+        debug!("trace-id: {}", trace_data);
+
+        let flags = trace_data.chars().last().unwrap_or('0');
+
+        if flags == '1' || flags == '3' {
+            let mut text_map = HashMap::new();
+            text_map.insert(
+                TRACE_ID_PREFIX.to_string(),
+                trace_data.to_string()
+            );
+            SpanContext::extract_from_text_map(&text_map)
+        } else {
+            debug!("Trace not sampled, flags={}, ignoring", flags);
+            Ok(None)
+        }
     } else {
         Ok(None)
     }
