@@ -20,6 +20,7 @@ use lazy_static::lazy_static;
 #[macro_use] extern crate prometheus;
 
 use mongoproxy::tracing;
+use mongoproxy::dstaddr;
 use mongoproxy::mongodb::tracker::{MongoStatsTracker};
 
 
@@ -72,14 +73,21 @@ struct ProxyDef {
 }
 
 impl ProxyDef {
+    /// Parse a proxy definition from a string of <local_port>[:remote-host:remote-port]
     fn from_str(proxy_def: &str) -> Result<Self, Box<dyn Error>> {
         if let Some(pos) = proxy_def.find(':') {
             let (local_port, remote_hostport) = proxy_def.split_at(pos);
-            let local_addr = format!("0.0.0.0:{}", local_port).parse()?;
-            let remote_addr = remote_hostport[1..].to_string();
-            Ok(ProxyDef{ local_addr, remote_addr })
+            let local_addr = format!("0.0.0.0:{}", local_port);
+
+            Ok(ProxyDef{
+                local_addr,
+                remote_addr: remote_hostport[1..].to_string()
+            })
         } else {
-            Err(From::from("malformed proxy spec"))
+            Ok(ProxyDef{
+                local_addr: format!("0.0.0.0:{}", proxy_def),
+                remote_addr: String::from("")
+            })
         }
     }
 }
@@ -150,13 +158,32 @@ fn main() {
 
 fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>) {
     let listener = TcpListener::bind(&proxy.local_addr).unwrap();
-    info!("Proxying {} -> {}", proxy.local_addr, proxy.remote_addr);
+    if proxy.remote_addr.is_empty() {
+        info!("Proxying {} -> <original dst>", proxy.local_addr);
+    } else {
+        info!("Proxying {} -> {}", proxy.local_addr, proxy.remote_addr);
+    }
+
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let client_addr = format_client_address(&stream.peer_addr().unwrap());
-                let server_addr = proxy.remote_addr.to_string();
+
+                let server_addr = if proxy.remote_addr.is_empty() {
+                    if let Some(sockaddr) = dstaddr::orig_dst_addr(&stream) {
+                        debug!("Original destination address: {:?}", sockaddr);
+                        sockaddr.to_string()
+                    } else {
+                        error!("Host not set and destination address not found: {}",
+                            &stream.peer_addr().unwrap());
+                        // TODO: Increase a counter
+                        continue;
+                    }
+                } else {
+                    proxy.remote_addr.clone()
+                };
+
                 let tracer = tracer.clone();
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
