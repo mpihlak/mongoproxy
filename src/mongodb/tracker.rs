@@ -244,6 +244,11 @@ impl MongoStatsTracker{
         for (hdr, msg) in self.client.parse_buffer(buf) {
             info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
+            // Ignore useless messages
+            if let MongoMessage::None = msg {
+                continue;
+            }
+
             if self.client_application.is_empty() {
                 if let Some(app_name) = extract_app_name(&msg) {
                     self.client_application = app_name;
