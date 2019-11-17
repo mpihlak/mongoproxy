@@ -10,16 +10,32 @@ Jaeger tracing is very experimental, but I've seen it work. See below for a scre
 
 ## Usage
 
+### Static proxy with pre-determined server address
 ```
-mongoproxy \
-    --proxy 27113:localhost:27017 \
+mongoproxy --proxy 27113:localhost:27017
+```
+This will proxy all requests on port `27113` to a fixed MongoDb instance running on `localhost:27017`. Useful when running this as a front-proxy that is shared by many cliints. Does not support replica sets, as replicaset connections can be redirected to any host in the set.
+
+More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or `debug`. Add `RUST_BACKTRACE=1` for troubleshooting those (rare) crashes.
+
+### Dynamic proxy
+```
+mongoproxy --proxy 27111
+```
+
+This mode is used when running the proxy as a sidecar on a K8s deployment. `iptables` rules need to be set up to redirect all port 27017 traffic through the proxy. The proxy then determines the original destination address via `getsockopt` and forwards the requests to its destination. Because it captures all traffic to Mongo ports, it also supports replicaset connections.
+
+NB! This mode is unusable without NAT or port-redirection, so don't try it. Also requires `getsockopt` that supports `SO_ORIGINAL_DST` option.
+
+### Dynamic proxy with Jaeger tracing
+```
+mongoproxy --proxy 27111 \
     --service-name mongoproxy-ftw \
     --enable-jaeger \
     --jaeger-addr localhost:6831
 ```
-This will proxy all requests on port `27113` to a MongoDb instance running on `localhost:27017`. Jaeger tracing is enabled and the spans will be sent to collector on `localhost:6831`. 
 
-More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or `debug`. Add `RUST_BACKTRACE=1` for troubleshooting those (rare) crashes.
+Same as above but with Jaeger tracing enabled. Spans will be sent to collector on `localhost:6831`. The service name for the traces is set to `mongoproxy-ftw`.
 
 ## Metrics
 
