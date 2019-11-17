@@ -4,9 +4,11 @@ There are many MongoDb proxies, but this one is about observability. It passes b
 It does not meddle with the traffic, but passes bytes between the application and the database as they are.
 
 ## Current state
-Mostly works -- rarely crashes and does collect useful metrics. Performance is acceptable -- sacrifice a millisecond or two in exchange of metrics. Runs a thread per-connection, so may run into trouble with large number of connections.
+Works pretty well. That is, doesn't crash and collects useful metrics. Performance overhead is minimal, memory usage depends on the max request/response size (currently needs to have the whole BSON in memory for parsing).
 
-Jaeger tracing is very experimental, but I've seen it work. See below for a screenshot.
+Runs a thread per-connection, so may run into trouble with large number of connections. Maybe move it to Tokio once the async/await stuff stabilizes there.
+
+Jaeger tracing is experimental, but I've seen it work. See below for a screenshot.
 
 ## Usage
 
