@@ -48,3 +48,7 @@ Example:
 Mongoproxy will not create tracing spans unless the application explicitly requests it. The application does this by passing the trace id in the `$comment` field of the MongoDb query. So, for example if a `find` operation has `uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1` in the comment, the proxy picks this up and will create a child span for the `find` operation. Like this:
 
 ![Trace example](https://github.com/mpihlak/mongoproxy/blob/master/img/trace.png)
+
+## Notes
+
+MongoDb `OP_COMMAND` protocol is not supported. This makes the proxy mostly unusable for MongoDb versions < `3.5`.
