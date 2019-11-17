@@ -172,6 +172,10 @@ fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>) {
 
                 let server_addr = if proxy.remote_addr.is_empty() {
                     if let Some(sockaddr) = dstaddr::orig_dst_addr(&stream) {
+                        // This only assumes that NATd connections are received
+                        // and thus always have a valid target address. We expect
+                        // iptables rules to be in place to block direct access
+                        // to the proxy port.
                         debug!("Original destination address: {:?}", sockaddr);
                         sockaddr.to_string()
                     } else {
