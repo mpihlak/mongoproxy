@@ -1,12 +1,22 @@
 name: Rust
 
-on: [push]
+on:
+  push:
+    tags:
+      - v.*
+      - test
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
-    - name: Build
-      run: cargo build
+    - uses: actions/checkout@master
     - name: Run tests
       run: cargo test
+    - name: Publish Docker image 
+      uses: elgohr/Publish-Docker-Github-Action@master
+      with:
+        name: mpihlak/mongoproxy
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
