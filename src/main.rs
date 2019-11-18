@@ -164,7 +164,6 @@ fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>) {
         info!("Proxying {} -> {}", proxy.local_addr, proxy.remote_addr);
     }
 
-
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
