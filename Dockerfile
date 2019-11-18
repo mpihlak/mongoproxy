@@ -7,18 +7,18 @@ WORKDIR /build/mongoproxy
 
 COPY Cargo.* ./
 RUN mkdir benches && touch benches/tracker_benchmark.rs
-RUN cargo build
+RUN cargo build --release
 
 # Clean up dummy project remains
 RUN rm src/*.rs
-RUN rm target/debug/deps/mongoproxy*
+RUN rm target/release/deps/mongoproxy*
 
 # Now, build mongoproxy
 COPY src/ ./src/
 COPY benches/ ./benches/
 RUN cargo build
 
-FROM debug-image
+FROM debian:buster-slim
 
 WORKDIR /mongoproxy
-COPY --from=builder /build/mongoproxy/target/debug/mongoproxy ./
+COPY --from=builder /build/mongoproxy/target/release/mongoproxy ./
