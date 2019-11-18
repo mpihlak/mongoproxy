@@ -1,6 +1,11 @@
 name: Rust
 
-on: [push]
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - v.*
 
 jobs:
   build:
@@ -15,4 +20,4 @@ jobs:
         name: mpihlak/mongoproxy
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
-
+        cache: true
