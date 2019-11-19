@@ -1,5 +1,6 @@
 use super::messages::{MsgHeader,MongoMessage};
 use super::parser::MongoProtocolParser;
+use crate::bson_lite;
 use crate::tracing;
 
 use std::time::{Instant};
@@ -15,7 +16,7 @@ use rustracing_jaeger::{Tracer};
 
 
 // Common labels for all op metrics
-const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db"];
+const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server"];
 
 
 lazy_static! {
@@ -211,6 +212,8 @@ pub struct MongoStatsTracker {
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
+    replicaset:             String,
+    server_host:            String,
     tracer:                 Option<Tracer>,
 }
 
@@ -233,6 +236,8 @@ impl MongoStatsTracker{
             server_addr: server_addr.to_string(),
             client_request_map: HashMap::new(),
             client_application: String::from(""),
+            replicaset: String::from(""),
+            server_host: String::from(""),
             tracer,
         }
     }
@@ -269,8 +274,8 @@ impl MongoStatsTracker{
         }
     }
 
-    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 5] {
-        [ &self.client_addr, &self.client_application, &req.op, &req.coll, &req.db]
+    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; OP_LABELS.len()] {
+        [ &self.client_addr, &self.client_application, &req.op, &req.coll, &req.db, &self.replicaset, &self.server_host]
     }
 
     pub fn track_server_response(&mut self, buf: &[u8]) {
@@ -291,7 +296,7 @@ impl MongoStatsTracker{
         }
     }
 
-    fn observe_server_response_to(&self, hdr: &MsgHeader, msg: MongoMessage, client_request: &mut ClientRequest) {
+    fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: MongoMessage, client_request: &mut ClientRequest) {
         SERVER_RESPONSE_LATENCY_SECONDS
             .with_label_values(&self.label_values(&client_request))
             .observe(client_request.message_time.elapsed().as_secs_f64());
@@ -305,6 +310,8 @@ impl MongoStatsTracker{
         match msg {
             MongoMessage::Msg(m) => {
                 for section in m.documents {
+                    self.try_parsing_replicaset(&section);
+
                     if let Some(ok) = section.get_float("ok") {
                         if ok == 0.0 {
                             client_request.span.set_tag(|| {
@@ -342,6 +349,10 @@ impl MongoStatsTracker{
                 }
             },
             MongoMessage::Reply(r) => {
+                for doc in &r.documents {
+                    // The first isMaster response is an OP_REPLY so we need to look at it
+                    self.try_parsing_replicaset(&doc);
+                }
                 client_request.span.set_tag(|| {
                     Tag::new("documents_returned", r.number_returned as i64)
                 });
@@ -354,6 +365,20 @@ impl MongoStatsTracker{
             },
         }
     }
+
+    fn try_parsing_replicaset(&mut self, doc: &bson_lite::BsonLiteDocument) {
+        if let Some(op) = doc.get_str("op") {
+            if op == "hosts" {
+                if let Some(replicaset) = doc.get_str("replicaset") {
+                    self.replicaset = replicaset;
+                }
+                if let Some(server_host) = doc.get_str("server_host") {
+                    self.server_host = server_host;
+                }
+            }
+        }
+    }
+
 }
 
 /// Extract `appname` from MongoDb `isMaster` query
