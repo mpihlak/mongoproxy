@@ -1,10 +1,12 @@
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{self, Read, Write, Error, ErrorKind};
 use std::fmt;
-use log::{warn,debug};
+use log::{warn,info,debug};
 use num_derive::FromPrimitive;
-
 use crate::bson_lite::{self,FieldSelector,BsonLiteDocument};
+
+extern crate bson;
+
 
 pub const HEADER_LENGTH: usize = 16;
 
@@ -167,7 +169,19 @@ impl MsgOpMsg {
                 debug!("section_size={}, seq_id={}", section_size, seq_id);
             }
 
-            match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
+            // Read the bytes to a temporary Vec so that we can parse the bytes twice
+            let mut buf = Vec::new();
+            rdr.read_to_end(&mut buf)?;
+
+            if cfg!(feature = "log_mongodb_messages") {
+                if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
+                    info!("Full BSON: {}", doc);
+                } else {
+                    warn!("Full BSON parsing failed");
+                }
+            }
+
+            match bson_lite::decode_document(&mut &buf[..], &MONGO_BSON_FIELD_SELECTOR) {
                 Ok(doc) => {
                     debug!("doc: {}", doc);
                     documents.push(doc);
