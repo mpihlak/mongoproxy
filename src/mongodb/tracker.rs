@@ -274,7 +274,7 @@ impl MongoStatsTracker{
         }
     }
 
-    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; OP_LABELS.len()] {
+    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 7] {
         [ &self.client_addr, &self.client_application, &req.op, &req.coll, &req.db, &self.replicaset, &self.server_host]
     }
 
