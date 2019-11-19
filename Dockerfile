@@ -11,12 +11,13 @@ RUN cargo build --release
 
 # Clean up dummy project remains
 RUN rm src/*.rs
-RUN rm target/release/deps/mongoproxy*
+RUN rm target/*/deps/mongoproxy*
+RUN rm target/*/mongoproxy
 
 # Now, build mongoproxy
 COPY src/ ./src/
 COPY benches/ ./benches/
-RUN cargo build
+RUN cargo build --release
 
 FROM debian:buster-slim
 
