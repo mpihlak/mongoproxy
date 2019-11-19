@@ -1,5 +1,5 @@
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
-use std::io::{self, Read, Write, Error, ErrorKind};
+use std::io::{self, Read, Write, Cursor, Error, ErrorKind};
 use std::fmt;
 use log::{warn,info,debug};
 use num_derive::FromPrimitive;
@@ -19,6 +19,9 @@ lazy_static! {
             .with("db", "/$db")
             .with("collection", "/collection")
             .with("ok", "/ok")
+            // The following are returned as a response to "isMaster"
+            .with("replicaset", "/setName")
+            .with("server_host", "/me")
             // TODO: Some operations only set $comment field in the request document (count, update, remove).
             // Examples:
             // { q: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, limit: 0 }
@@ -140,7 +143,7 @@ impl fmt::Display for MsgOpMsg {
 }
 
 impl MsgOpMsg {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: &mut impl Read) -> io::Result<Self> {
         let flag_bits = rdr.read_u32::<LittleEndian>()?;
         debug!("flag_bits={:04x}", flag_bits);
 
@@ -159,25 +162,29 @@ impl MsgOpMsg {
                 },
             };
 
+            // We're reading the individual BSON documents into Vec so that we can dump the
+            // contents for debugging.
+
+            let mut buf = Vec::new();
             if kind != 0 {
                 let section_size = rdr.read_u32::<LittleEndian>()? as usize;
                 let seq_id = read_c_string(&mut rdr)?;
 
-                // So looks like the section_size is actually the BSON document size
-                // plus the length of the Cstring and the 4 bytes for the size.
-                // We're going to ignore it, as the BSON doc has it's own size bytes.
                 debug!("section_size={}, seq_id={}", section_size, seq_id);
-            }
 
-            // Read the bytes to a temporary Vec so that we can parse the bytes twice
-            let mut buf = Vec::new();
-            rdr.read_to_end(&mut buf)?;
+                // Section size includes the size of the cstring, but not the length bytes
+                let bson_size = section_size - seq_id.len() - 1;
+                rdr.take(bson_size as u64).read_to_end(&mut buf)?;
+            } else {
+                info!("reading to end");
+                rdr.read_to_end(&mut buf)?;
+            }
 
             if cfg!(feature = "log_mongodb_messages") {
                 if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
-                    info!("Full BSON: {}", doc);
+                    info!("OP_MSG BSON: {}", doc);
                 } else {
-                    warn!("Full BSON parsing failed");
+                    warn!("OP_MSG BSON parsing failed");
                 }
             }
 
@@ -242,10 +249,22 @@ impl MsgOpQuery {
         let full_collection_name = read_c_string(&mut rdr)?;
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
         let number_to_return = rdr.read_i32::<LittleEndian>()?;
-        let query = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
+
+        let mut buf = Vec::new();
+        rdr.read_to_end(&mut buf)?;
+        let query = match bson_lite::decode_document(&mut &buf[..], &MONGO_BSON_FIELD_SELECTOR) {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
+
+        if cfg!(feature = "log_mongodb_messages") {
+            if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
+                info!("OP_QUERY BSON: {}", doc);
+            } else {
+                warn!("OP_QUERY BSON parsing failed");
+            }
+        }
+
         Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return, query})
     }
 }
@@ -383,9 +402,22 @@ impl MsgOpReply {
         let starting_from = rdr.read_u32::<LittleEndian>()?;
         let number_returned = rdr.read_u32::<LittleEndian>()?;
         let mut documents = Vec::new();
-        while let Ok(doc) = bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
+
+        let mut buf = Vec::new();
+        rdr.read_to_end(&mut buf)?;
+
+        let mut c = Cursor::new(&buf);
+        while let Ok(doc) = bson_lite::decode_document(&mut c, &MONGO_BSON_FIELD_SELECTOR) {
             documents.push(doc);
         }
+
+        if cfg!(feature = "log_mongodb_messages") {
+            let mut c = Cursor::new(&buf);
+            while let Ok(doc) = bson::decode_document(&mut c) {
+                info!("OP_REPLY BSON: {}", doc);
+            }
+        }
+
         Ok(MsgOpReply{flags, cursor_id, starting_from, number_returned, documents})
     }
 }
