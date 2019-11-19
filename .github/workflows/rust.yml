@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@master
-    - name: Run tests
-      run: cargo test
+#   - name: Run tests
+#     run: cargo test
     - name: Publish init-container image 
       uses: elgohr/Publish-Docker-Github-Action@master
       with:
@@ -19,10 +19,12 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
         dockerfile: Dockerfile-init
-    - name: Publish mongoproxy image 
-      uses: elgohr/Publish-Docker-Github-Action@master
-      with:
-        name: mpihlak/mongoproxy
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-        cache: true
+        tag_names: true
+#   - name: Publish mongoproxy image 
+#     uses: elgohr/Publish-Docker-Github-Action@master
+#     with:
+#       name: mpihlak/mongoproxy
+#       username: ${{ secrets.DOCKER_USERNAME }}
+#       password: ${{ secrets.DOCKER_PASSWORD }}
+#       cache: true
+#       tag_names: true
