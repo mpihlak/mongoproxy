@@ -55,7 +55,7 @@ lazy_static! {
 
     static ref CLIENT_CONNECT_TIME_SECONDS: CounterVec =
         register_counter_vec!(
-            "mongoproxy_client_connect_time_seconds",
+            "mongoproxy_client_connected_time_seconds",
             "How long has this client been connected",
             &["client"]).unwrap();
 
