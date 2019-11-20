@@ -297,6 +297,9 @@ impl MongoStatsTracker{
     }
 
     fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: MongoMessage, client_request: &mut ClientRequest) {
+
+        // TODO: Here we might not yet have the replicaset and server name labels. So possibly
+        // move those at the end of this function.
         SERVER_RESPONSE_LATENCY_SECONDS
             .with_label_values(&self.label_values(&client_request))
             .observe(client_request.message_time.elapsed().as_secs_f64());
