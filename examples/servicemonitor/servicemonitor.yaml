@@ -1,0 +1,12 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mongoproxy-sidecar-metrics
+spec:
+  selector:
+    matchLabels:
+      service: mongoproxy-sidecar-metrics
+  endpoints:
+  - targetPort: proxy-admin
+    interval: 30s
+    path: /metrics

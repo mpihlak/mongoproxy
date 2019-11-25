@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongoproxy-front-example
+spec:
+  selector:
+    matchLabels:
+      app: mongoproxy-front-example
+  template:
+    metadata:
+      labels:
+        app: mongoproxy-front-example
+    spec:
+      containers:
+      - name: mongoproxy
+        image: mpihlak/mongoproxy:v0.2.6-1
+        ports:
+        - containerPort: 27017
+          name: mongo-port
+        - containerPort: 9898
+          name: metrics-port
+        command:
+          - ./mongoproxy
+        args:
+          - --proxy
+          - 27017:some-mongodb.db:27017
+        env:
+          - name: RUST_LOG
+            value: info
+          - name: RUST_BACKTRACE
+            value: "1"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: metrics-port
+          initialDelaySeconds: 1
+          periodSeconds: 2
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: metrics-port
+          initialDelaySeconds: 1
+          periodSeconds: 2
+        resources:
+          limits:
+            memory: 256Mi
+            cpu: 200m
+          requests:
+            memory: 32Mi
+            cpu: 100m

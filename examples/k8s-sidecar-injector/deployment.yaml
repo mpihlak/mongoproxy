@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongoproxy-injector-example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongoproxy-injector-example
+  template:
+    metadata:
+      annotations:
+        injector.tumblr.com/request: mongoproxy
+      labels:
+        app: mongoproxy-injector-example
+        scrape-mongoproxy-metrics: enabled
+    spec:
+      containers:
+      - name: app
+        image: alpine:3.9
+        command: [ "/bin/sleep", "86400" ]
+        resources:
+          limits:
+            cpu: 100m
+            memory: 256Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi

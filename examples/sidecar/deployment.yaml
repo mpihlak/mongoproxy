@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongoproxy-sidecar-example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongoproxy-sidecar-example
+  template:
+    metadata:
+      labels:
+        scrape-mongoproxy-metrics: enabled
+        app: mongoproxy-sidecar-example
+    spec:
+      initContainers:
+      # init-container to do port 27017 redirection to the proxy
+      - name: init-mongoproxy
+        image: mpihlak/mongoproxy-init:v0.2.6-1
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN"]
+      containers:
+      # proxy container, forward everything received on port 27111
+      # to it's original destination address.
+      - name: mongoproxy
+        command: [ "./mongoproxy", "--proxy=27111" ]
+        image: mpihlak/mongoproxy:v0.2.6-1
+        securityContext:
+          runAsUser: 9999
+        env:
+        - name: RUST_LOG
+          value: info
+        - name: RUST_BACKTRACE
+          value: "1"
+        ports:
+        - containerPort: 9898
+          name: proxy-admin
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: proxy-admin
+          periodSeconds: 2
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: proxy-admin
+          periodSeconds: 2
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+      # the "application" container.
+      # "apk add mongodb" and try connecting to an existing Mongo database
+      - name: app
+        image: alpine:3.9
+        command: [ "/bin/sleep", "86400" ]
+        resources:
+          limits:
+            cpu: 100m
+            memory: 256Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi

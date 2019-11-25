@@ -1,0 +1,14 @@
+# This is a service that pulls together all other services that run a Mongoproxy sidecar.
+# 
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongoproxy-sidecar-metrics
+  labels:
+    service: mongoproxy-sidecar-metrics
+spec:
+  ports:
+  - port: 9898
+    name: metrics-port
+  selector:
+    scrape-mongoproxy-metrics: enabled
