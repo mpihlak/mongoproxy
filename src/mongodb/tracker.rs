@@ -6,7 +6,7 @@ use crate::tracing;
 use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
-use log::{debug,info,warn};
+use log::{debug,warn};
 use prometheus::{Counter,CounterVec,HistogramVec};
 
 use rustracing::span::Span;
@@ -247,7 +247,7 @@ impl MongoStatsTracker{
             .inc_by(buf.len() as f64);
 
         for (hdr, msg) in self.client.parse_buffer(buf) {
-            info!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
+            debug!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
             // Ignore useless messages
             if let MongoMessage::None = msg {
@@ -283,7 +283,7 @@ impl MongoStatsTracker{
             .inc_by(buf.len() as f64);
 
         for (hdr, msg) in self.server.parse_buffer(buf) {
-            info!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
+            debug!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
             if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
                 self.observe_server_response_to(&hdr, msg, &mut client_request);
@@ -327,7 +327,6 @@ impl MongoStatsTracker{
                     }
                     // Calculate number of documents returned from cursor response
                     if let Some(docs_returned) = section.get_i32("docs_returned") {
-                        debug!("documents returned={}", docs_returned);
                         client_request.span.set_tag(|| {
                             Tag::new("documents_returned", docs_returned as i64)
                         });

@@ -27,10 +27,10 @@ pub fn init_tracer(enable_tracer: bool, service_name: &str, jaeger_addr: SocketA
 
     thread::spawn(move || {
         for span in span_rx {
-            info!("# SPAN: {:?}", span);
+            debug!("# SPAN: {:?}", span);
             match reporter.report(&[span]) {
                 Ok(_) => {
-                    info!("Sent to collector");
+                    debug!("Sent to collector");
                 },
                 Err(e) => {
                     warn!("Failed to report span: {}", e);

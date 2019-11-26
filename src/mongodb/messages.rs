@@ -176,7 +176,6 @@ impl MsgOpMsg {
                 let bson_size = section_size - seq_id.len() - 1;
                 rdr.take(bson_size as u64).read_to_end(&mut buf)?;
             } else {
-                info!("reading to end");
                 rdr.read_to_end(&mut buf)?;
             }
 

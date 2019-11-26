@@ -267,13 +267,11 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
 
     while !done {
         poll.poll(&mut events, Some(Duration::from_millis(1000))).unwrap();
-        debug!("Poll done.");
 
         let mut connection_was_idle = true;
         for event in events.iter() {
             match event.token() {
                 CLIENT => {
-                    debug!("Reading from client");
                     connection_was_idle = false;
                     let mut track_client = |buf: &[u8]| {
                         tracker.track_client_request(buf);
@@ -285,7 +283,6 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
                     }
                 },
                 SERVER => {
-                    debug!("Reading from server");
                     connection_was_idle = false;
                     let mut track_server = |buf: &[u8]| {
                         tracker.track_server_response(buf);
@@ -357,7 +354,6 @@ fn write_to_stream(stream: &mut TcpStream, mut buf: &[u8]) -> std::io::Result<()
                 buf = &buf[len..];
             },
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                warn!("{:?}: write would have blocked: {}", thread::current().id(), e);
                 thread::sleep(time::Duration::from_millis(1));
             },
             Err(other) => {

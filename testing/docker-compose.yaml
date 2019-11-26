@@ -5,7 +5,7 @@ services:
     image: mongoproxy:latest
     environment:
       - RUST_BACKTRACE=1
-      - RUST_LOG=info
+      - RUST_LOG=debug
     command: ./mongoproxy --proxy 27111:mongodb:27017 --enable-jaeger --jaeger-addr jaeger:6831
     #command: ./mongoproxy --proxy 27111:mongodb-global.sandbox.int.starship.xyz:27017 --enable-jaeger --jaeger-addr jaeger:6831
     ports:
