@@ -134,11 +134,7 @@ impl MongoProtocolParser {
             debug!("Working buffer exhausted, starting anew. Parser buf was len={}, capacity={}",
                 self.message_buf.len(), self.message_buf.capacity());
             self.message_buf_pos = 0;
-
-            // Clear the message buf, now that we have consumed all that we want from it.
-            // This has slightly better performance than allocating a new Vector and reduces
-            // fragmentation from constantly allocating and deallocating large chunks.
-            self.message_buf.clear();
+            self.message_buf = Vec::new();
         }
 
         result
