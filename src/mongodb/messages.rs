@@ -1,9 +1,9 @@
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
-use std::io::{self, Read, Write, Cursor, Error, ErrorKind};
+use std::io::{self, Read, BufRead, Write, Cursor};
 use std::fmt;
 use log::{warn,info,debug};
 use num_derive::FromPrimitive;
-use crate::bson_lite::{self,FieldSelector,BsonLiteDocument};
+use crate::bson_lite::{self,FieldSelector,BsonLiteDocument,read_cstring};
 
 extern crate bson;
 
@@ -101,7 +101,7 @@ impl MsgHeader {
         }
     }
 
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
         let message_length  = rdr.read_u32::<LittleEndian>()? as usize;
         let request_id      = rdr.read_u32::<LittleEndian>()?;
         let response_to     = rdr.read_u32::<LittleEndian>()?;
@@ -143,7 +143,7 @@ impl fmt::Display for MsgOpMsg {
 }
 
 impl MsgOpMsg {
-    pub fn from_reader(mut rdr: &mut impl Read) -> io::Result<Self> {
+    pub fn from_reader<R: Read+BufRead>(mut rdr: &mut R) -> io::Result<Self> {
         let flag_bits = rdr.read_u32::<LittleEndian>()?;
         debug!("flag_bits={:04x}", flag_bits);
 
@@ -168,7 +168,7 @@ impl MsgOpMsg {
             let mut buf = Vec::new();
             if kind != 0 {
                 let section_size = rdr.read_u32::<LittleEndian>()? as usize;
-                let seq_id = read_c_string(&mut rdr)?;
+                let seq_id = read_cstring(&mut rdr)?;
 
                 debug!("section_size={}, seq_id={}", section_size, seq_id);
 
@@ -243,9 +243,9 @@ impl fmt::Display for MsgOpQuery {
 }
 
 impl MsgOpQuery {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
         let flags  = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_c_string(&mut rdr)?;
+        let full_collection_name = read_cstring(&mut rdr)?;
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
         let number_to_return = rdr.read_i32::<LittleEndian>()?;
 
@@ -283,9 +283,9 @@ impl fmt::Display for MsgOpGetMore {
 }
 
 impl MsgOpGetMore {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
         let _zero = rdr.read_i32::<LittleEndian>()?;
-        let full_collection_name = read_c_string(&mut rdr)?;
+        let full_collection_name = read_cstring(&mut rdr)?;
         let number_to_return = rdr.read_i32::<LittleEndian>()?;
         let cursor_id = rdr.read_i64::<LittleEndian>()?;
 
@@ -309,9 +309,9 @@ impl fmt::Display for MsgOpUpdate {
 }
 
 impl MsgOpUpdate {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
         let _zero = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_c_string(&mut rdr)?;
+        let full_collection_name = read_cstring(&mut rdr)?;
         let flags = rdr.read_u32::<LittleEndian>()?;
         let selector = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
             Ok(doc) => doc,
@@ -340,9 +340,9 @@ impl fmt::Display for MsgOpDelete {
 }
 
 impl MsgOpDelete {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
         let _zero = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_c_string(&mut rdr)?;
+        let full_collection_name = read_cstring(&mut rdr)?;
         let flags = rdr.read_u32::<LittleEndian>()?;
         let selector = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
             Ok(doc) => doc,
@@ -366,9 +366,9 @@ impl fmt::Display for MsgOpInsert {
 }
 
 impl MsgOpInsert {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
         let flags = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_c_string(&mut rdr)?;
+        let full_collection_name = read_cstring(&mut rdr)?;
         // Ignore the documents, we don't need anything from there
         Ok(MsgOpInsert{flags, full_collection_name})
     }
@@ -395,7 +395,7 @@ impl fmt::Display for MsgOpReply {
 }
 
 impl MsgOpReply {
-    pub fn from_reader(mut rdr: impl Read) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
         let flags  = rdr.read_u32::<LittleEndian>()?;
         let cursor_id = rdr.read_u64::<LittleEndian>()?;
         let starting_from = rdr.read_u32::<LittleEndian>()?;
@@ -418,38 +418,5 @@ impl MsgOpReply {
         }
 
         Ok(MsgOpReply{flags, cursor_id, starting_from, number_returned, documents})
-    }
-}
-
-fn read_c_string(rdr: impl Read) -> io::Result<String> {
-    let mut bytes = Vec::new();
-    for byte in rdr.bytes() {
-        match byte {
-            Ok(b) if b == 0 => break,
-            Ok(b) => bytes.push(b),
-            Err(e) => return Err(e),
-        }
-    }
-
-    if let Ok(res) = String::from_utf8(bytes) {
-        return Ok(res)
-    }
-
-    Err(Error::new(ErrorKind::Other, "conversion error"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_read_cstring() {
-        let buf = b"kala\0";
-        let res = read_c_string(&buf[..]).unwrap();
-        assert_eq!(res, "kala");
-
-        let buf = b"\0";
-        let res = read_c_string(&buf[..]).unwrap();
-        assert_eq!(res, "");
     }
 }

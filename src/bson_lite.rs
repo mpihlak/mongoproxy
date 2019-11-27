@@ -10,11 +10,9 @@
 /// multiple times, the value that is encountered last is used.
 
 use std::fmt;
-use std::io::{self,Read,Error,ErrorKind};
+use std::io::{self,Read,BufRead,Error,ErrorKind};
 use std::collections::{HashMap,HashSet};
 use byteorder::{LittleEndian, ReadBytesExt};
-
-use log::{debug};
 
 
 #[derive(Debug)]
@@ -154,7 +152,7 @@ impl BsonLiteDocument {
 
 /// Parser guts, collect the selected values into a HashMap
 #[allow(dead_code)]
-fn parse_document<R: Read>(
+fn parse_document<R: BufRead>(
                   mut rdr: &mut R,
                   selector: &FieldSelector,
                   prefix: &str,
@@ -174,15 +172,12 @@ fn parse_document<R: Read>(
 
         let elem_name = read_cstring(&mut rdr)?;
 
-        debug!("pos={} elem type=0x{:02x} name={}", position, elem_type, elem_name);
-
         let prefix_name = format!("{}/{}", prefix, elem_name);
         let prefix_pos = format!("{}/@{}", prefix, position);
 
         // Check if we just want the element name
         let want_field_name_by_pos = format!("{}/#{}", prefix, position);
         if let Some(item_key) = selector.get(&want_field_name_by_pos) {
-            debug!("taking field because {}", want_field_name_by_pos);
             doc.insert(item_key.to_string(), BsonValue::String(elem_name.to_string()));
         }
 
@@ -224,7 +219,6 @@ fn parse_document<R: Read>(
                 // We only go through the trouble of parsing this if the field selector
                 // wants the document value or some element within it.
                 let _doc_len = rdr.read_i32::<LittleEndian>()?;
-                debug!("prefix=[{}] and want_it={}", prefix_name, selector.want_prefix(&prefix_name));
                 if want_this_value || selector.want_prefix(&prefix_name) {
                     parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
                     BsonValue::Placeholder(String::from("<nested document>"))
@@ -321,10 +315,7 @@ fn parse_document<R: Read>(
             },
         };
 
-        debug!("elem_value={:?}", elem_value);
-
         for elem_name in wanted_elements.iter() {
-            debug!("want this because: '{}' matches", elem_name);
             doc.insert(elem_name.to_string(), elem_value.clone());
         }
     }
@@ -332,7 +323,7 @@ fn parse_document<R: Read>(
 }
 
 /// Parse the BSON document, collecting selected fields into a HashMap
-pub fn decode_document(mut rdr: impl Read, selector: &FieldSelector) -> io::Result<BsonLiteDocument> {
+pub fn decode_document(mut rdr: impl BufRead, selector: &FieldSelector) -> io::Result<BsonLiteDocument> {
     let _document_size = rdr.read_i32::<LittleEndian>()?;
 
     let mut doc = BsonLiteDocument::new();
@@ -350,15 +341,11 @@ fn skip_read_len<T: Read>(rdr: &mut T) -> io::Result<u64> {
     skip_bytes(rdr, str_len as usize)
 }
 
-fn read_cstring(rdr: impl Read) -> io::Result<String> {
+pub fn read_cstring(rdr: &mut impl BufRead) -> io::Result<String> {
     let mut bytes = Vec::new();
-    for byte in rdr.bytes() {
-        match byte {
-            Ok(b) if b == 0 => break,
-            Ok(b) => bytes.push(b),
-            Err(e) => return Err(e),
-        }
-    }
+
+    rdr.read_until(0, &mut bytes)?;
+    let _ = bytes.pop();
 
     if let Ok(res) = String::from_utf8(bytes) {
         return Ok(res)
@@ -469,5 +456,18 @@ mod tests {
         assert_eq!("foo", doc.get_str("first").unwrap());
         assert_eq!(2, doc.get_i32("array_len").unwrap());
         assert_eq!(2.7, doc.get_float("last").unwrap());
+    }
+
+    use std::io::{Cursor};
+
+    #[test]
+    fn test_read_cstring() {
+        let buf = b"kala\0";
+        let res = read_cstring(&mut Cursor::new(&buf[..])).unwrap();
+        assert_eq!(res, "kala");
+
+        let buf = b"\0";
+        let res = read_cstring(&mut Cursor::new(&buf[..])).unwrap();
+        assert_eq!(res, "");
     }
 }

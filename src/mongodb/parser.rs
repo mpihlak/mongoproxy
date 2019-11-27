@@ -1,5 +1,5 @@
 use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpGetMore,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage,OpCode};
-use std::io::{self,Read};
+use std::io::{self,BufRead};
 use log::{debug,warn,error};
 use prometheus::{CounterVec,Histogram};
 
@@ -141,7 +141,7 @@ impl MongoProtocolParser {
     }
 }
 
-fn extract_message(op_code: u32, mut rdr: impl Read) -> io::Result<MongoMessage> {
+fn extract_message(op_code: u32, mut rdr: impl BufRead) -> io::Result<MongoMessage> {
     OPCODE_COUNTER.with_label_values(&[&op_code.to_string()]).inc();
 
     match num_traits::FromPrimitive::from_u32(op_code) {
