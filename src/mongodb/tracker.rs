@@ -7,7 +7,7 @@ use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
 use log::{debug,warn};
-use prometheus::{Counter,CounterVec,HistogramVec};
+use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
 
 use rustracing::span::Span;
 use rustracing::tag::Tag;
@@ -42,6 +42,12 @@ lazy_static! {
         register_counter!(
             "mongoproxy_response_to_request_id_mismatch",
             "Number of occurrences where we don't have a matching client request for the response"
+            ).unwrap();
+
+    static ref RESPONSE_MATCH_HASHMAP_CAPACITY: Gauge =
+        register_gauge!(
+            "mongoproxy_response_hashmap_capacity_total",
+            "Response to request mapping HashMap size"
             ).unwrap();
 
     static ref SERVER_RESPONSE_LATENCY_SECONDS: HistogramVec =
@@ -271,6 +277,7 @@ impl MongoStatsTracker{
             // a server response belongs to.
             let req = ClientRequest::from(&self, msg);
             self.client_request_map.insert(hdr.request_id, req);
+            RESPONSE_MATCH_HASHMAP_CAPACITY.set(self.client_request_map.capacity() as f64);
         }
     }
 
