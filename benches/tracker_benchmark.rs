@@ -3,15 +3,16 @@ extern crate criterion;
 extern crate bson;
 extern crate mongoproxy;
 
-use std::io::Write;
+use std::io::{Cursor,Write};
 
 use mongoproxy::mongodb::tracker::{MongoStatsTracker};
 use mongoproxy::mongodb::parser::MongoProtocolParser;
 use mongoproxy::mongodb::messages::{self,MsgHeader,MsgOpMsg};
+use mongoproxy::bson_lite::{read_cstring};
 use criterion::Criterion;
 
 
-criterion_group!(benches, bench_tracker, bench_bson_parser);
+criterion_group!(benches, bench_tracker, bench_bson_parser, bench_cstring);
 criterion_main!(benches);
 
 fn create_message(op: &str, op_value: &str, mut buf: impl Write) {
@@ -100,6 +101,17 @@ fn bench_bson_parser(c: &mut Criterion) {
     c.bench_function("parse_bson_message",
         |b| b.iter(|| {
             let _doc = decode_document(&buf[..], &selector).unwrap();
+        }
+    ));
+}
+
+fn bench_cstring(c: &mut Criterion) {
+    let buf = b"foofoofoofoofoofoofooofoofofffoooooooffffo\0";
+
+    let mut cur = Cursor::new(buf.to_vec());
+    c.bench_function("read_cstring",
+        |b| b.iter(|| {
+            let _cstr = read_cstring(&mut cur).unwrap();
         }
     ));
 }
