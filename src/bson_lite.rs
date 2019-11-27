@@ -66,7 +66,7 @@ pub enum BsonValue {
     Int64(i64),
     ObjectId([u8;12]),
     Boolean(bool),
-    Placeholder(String),
+    Placeholder(&'static str),
     None,
 }
 
@@ -220,7 +220,7 @@ fn parse_document(mut rdr: &mut impl BufRead,
                 let _doc_len = rdr.read_i32::<LittleEndian>()?;
                 if want_this_value || selector.want_prefix(&prefix_name) {
                     parse_document(rdr, selector, &prefix_name, 0, &mut doc)?;
-                    BsonValue::Placeholder(String::from("<nested document>"))
+                    BsonValue::Placeholder("<nested document>")
                 } else {
                     skip_bytes(&mut rdr, _doc_len as usize - 4)?;
                     BsonValue::None
@@ -230,7 +230,7 @@ fn parse_document(mut rdr: &mut impl BufRead,
                 // Binary data
                 let len = rdr.read_i32::<LittleEndian>()?;
                 skip_bytes(&mut rdr, (len+1) as usize)?;
-                BsonValue::Placeholder(String::from("<binary data>"))
+                BsonValue::Placeholder("<binary data>")
             },
             0x06 => {
                 // Undefined value. Deprecated.
@@ -249,7 +249,7 @@ fn parse_document(mut rdr: &mut impl BufRead,
             0x09 => {
                 // UTC Datetime
                 skip_bytes(&mut rdr, 8)?;
-                BsonValue::Placeholder(String::from("<UTC datetime>"))
+                BsonValue::Placeholder("<UTC datetime>")
             },
             0x0A => {
                 // Null value
@@ -259,7 +259,7 @@ fn parse_document(mut rdr: &mut impl BufRead,
                 // Regular expression
                 let _regx = read_cstring(&mut rdr)?;
                 let _opts = read_cstring(&mut rdr)?;
-                BsonValue::Placeholder(String::from("<regex>"))
+                BsonValue::Placeholder("<regex>")
             },
             0x0C => {
                 // DBPointer. Deprecated.
@@ -270,18 +270,18 @@ fn parse_document(mut rdr: &mut impl BufRead,
             0x0D => {
                 // Javascript code
                 skip_read_len(&mut rdr)?;
-                BsonValue::Placeholder(String::from("<Javascript>"))
+                BsonValue::Placeholder("<Javascript>")
             },
             0x0E => {
                 // Symbol. Deprecated.
                 skip_read_len(&mut rdr)?;
-                BsonValue::Placeholder(String::from("<symbol>"))
+                BsonValue::Placeholder("<symbol>")
             },
             0x0F => {
                 // Code w/ scope
                 // TODO: Test that this parses properly
                 skip_read_len(&mut rdr)?;
-                BsonValue::Placeholder(String::from("<Javascript with scope>"))
+                BsonValue::Placeholder("<Javascript with scope>")
             },
             0x10 => {
                 // Int32
@@ -290,7 +290,7 @@ fn parse_document(mut rdr: &mut impl BufRead,
             0x11 => {
                 // Timestamp
                 skip_bytes(&mut rdr, 8)?;
-                BsonValue::Placeholder(String::from("<timestamp>"))
+                BsonValue::Placeholder("<timestamp>")
             },
             0x12 => {
                 // Int64
@@ -299,15 +299,15 @@ fn parse_document(mut rdr: &mut impl BufRead,
             0x13 => {
                 // Decimal128
                 skip_bytes(&mut rdr, 16)?;
-                BsonValue::Placeholder(String::from("<decimal128>"))
+                BsonValue::Placeholder("<decimal128>")
             },
             0xFF => {
                 // Min key.
-                BsonValue::Placeholder(String::from("<min key>"))
+                BsonValue::Placeholder("<min key>")
             },
             0x7F => {
                 // Min key.
-                BsonValue::Placeholder(String::from("<max key>"))
+                BsonValue::Placeholder("<max key>")
             },
             other => {
                 return Err(Error::new(ErrorKind::Other, format!("unrecognized type: 0x{:02x}", other)));
