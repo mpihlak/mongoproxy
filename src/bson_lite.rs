@@ -152,8 +152,7 @@ impl BsonLiteDocument {
 
 /// Parser guts, collect the selected values into a HashMap
 #[allow(dead_code)]
-fn parse_document<R: BufRead>(
-                  mut rdr: &mut R,
+fn parse_document(mut rdr: &mut impl BufRead,
                   selector: &FieldSelector,
                   prefix: &str,
                   position: u32,
@@ -355,13 +354,11 @@ pub fn read_cstring(rdr: &mut impl BufRead) -> io::Result<String> {
 }
 
 fn read_string_with_len(rdr: impl Read, str_len: usize) -> io::Result<String> {
-    assert!(str_len > 0);
-
     let mut buf = Vec::with_capacity(str_len);
     rdr.take(str_len as u64).read_to_end(&mut buf)?;
 
     // Remove the trailing null, we won't need it
-    buf.remove((str_len - 1) as usize);
+    let _ = buf.pop();
 
     if let Ok(res) = String::from_utf8(buf) {
         return Ok(res);
