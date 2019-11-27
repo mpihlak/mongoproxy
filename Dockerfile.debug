@@ -1,0 +1,36 @@
+FROM rust:1.39-buster as builder
+
+WORKDIR /build
+RUN USER=root cargo new --bin mongoproxy
+
+WORKDIR /build/mongoproxy
+
+COPY Cargo.* ./
+RUN mkdir benches && touch benches/tracker_benchmark.rs
+RUN cargo build
+
+# Clean up dummy project remains
+RUN rm src/*.rs
+RUN rm target/*/deps/mongoproxy*
+RUN rm target/*/mongoproxy
+
+# Now, build mongoproxy
+COPY src/ ./src/
+COPY benches/ ./benches/
+RUN cargo build
+
+FROM rust-debug
+
+RUN apt-get update && apt-get install -y sudo
+
+RUN adduser --uid 9999 --disabled-password --gecos '' mongoproxy
+
+RUN adduser mongoproxy sudo
+RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+
+WORKDIR /mongoproxy
+RUN chown mongoproxy:mongoproxy /mongoproxy
+
+USER mongoproxy
+
+COPY --from=builder /build/mongoproxy/target/debug/mongoproxy ./
