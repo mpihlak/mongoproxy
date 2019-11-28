@@ -1,7 +1,0 @@
-FROM debian:buster
-
-RUN apt-get update
-RUN apt-get install -y procps sysstat net-tools curl netcat iptables less
-RUN apt-get install -y heaptrack
-RUN apt-get install -y valgrind
-RUN apt-get install -y rust-gdb
