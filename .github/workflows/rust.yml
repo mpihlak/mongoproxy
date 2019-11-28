@@ -12,14 +12,6 @@ jobs:
     - uses: actions/checkout@master
     - name: Run tests
       run: cargo test
-    - name: Publish init-container image 
-      uses: elgohr/Publish-Docker-Github-Action@master
-      with:
-        name: mpihlak/mongoproxy-init
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-        dockerfile: Dockerfile-init
-        tag_names: true
     - name: Publish mongoproxy image 
       uses: elgohr/Publish-Docker-Github-Action@master
       with:
