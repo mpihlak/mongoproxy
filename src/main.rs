@@ -98,8 +98,8 @@ fn main() {
         .about("Proxies MongoDb requests to obtain metrics")
         .arg(Arg::with_name("proxy")
             .long("proxy")
-            .value_name("local-port:remote-host:remote-port")
-            .help("MongoDb server hostport to proxy to")
+            .value_name("local-port[:remote-host:remote-port]")
+            .help("Port the proxy listens on (sidecar) and optionally\na target hostport (for static proxy)")
             .multiple(true)
             .takes_value(true)
             .required(true))
@@ -111,7 +111,7 @@ fn main() {
         .arg(Arg::with_name("jaeger_addr")
             .long("jaeger-addr")
             .value_name("Jaeger agent host:port")
-            .help("Jaeger agent to send traces to (compact thrift protocol)")
+            .help("Jaeger agent hostport to send traces to (compact thrift protocol)")
             .takes_value(true)
             .required(false))
         .arg(Arg::with_name("service_name")
@@ -122,7 +122,7 @@ fn main() {
         .arg(Arg::with_name("admin_port")
             .long("admin-port")
             .value_name("ADMIN_PORT")
-            .help(&format!("Hostport for admin endpoint ({})", ADMIN_PORT))
+            .help(&format!("Port the admin endpoints listens on (metrics and health). Default {}", ADMIN_PORT))
             .takes_value(true))
         .get_matches();
 
