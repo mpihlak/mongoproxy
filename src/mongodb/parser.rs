@@ -1,4 +1,4 @@
-use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpGetMore,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage,OpCode};
+use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpGetMore,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage};
 use std::io::{self,BufRead};
 use log::{debug,warn,error};
 use prometheus::{CounterVec,Histogram};
@@ -144,36 +144,26 @@ impl MongoProtocolParser {
 fn extract_message(op_code: u32, mut rdr: impl BufRead) -> io::Result<MongoMessage> {
     OPCODE_COUNTER.with_label_values(&[&op_code.to_string()]).inc();
 
-    match num_traits::FromPrimitive::from_u32(op_code) {
-        Some(OpCode::OpReply) => {
-            return Ok(MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr)?));
-        }
-        Some(OpCode::OpQuery) => {
-            return Ok(MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr)?));
+    let msg = match op_code {
+           1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr)?),
+        2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr)?),
+        2005 => MongoMessage::GetMore(MsgOpGetMore::from_reader(&mut rdr)?),
+        2001 => MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr)?),
+        2006 => MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr)?),
+        2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr)?),
+        2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr)?),
+        2010 | 2011 => {
+            // This is the internal ping-pong, we don' care
+            MongoMessage::None
         },
-        Some(OpCode::OpGetMore) => {
-            return Ok(MongoMessage::GetMore(MsgOpGetMore::from_reader(&mut rdr)?));
-        },
-        Some(OpCode::OpUpdate) => {
-            return Ok(MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr)?));
-        },
-        Some(OpCode::OpDelete) => {
-            return Ok(MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr)?));
-        },
-        Some(OpCode::OpInsert) => {
-            return Ok(MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr)?));
-        },
-        Some(OpCode::OpMsg) => {
-            return Ok(MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr)?));
-        },
-        Some(OpCode::OpPing) => {},
-        Some(OpCode::OpPong) => {},
-        None => {
+        _ => {
             UNSUPPORTED_OPCODE_COUNTER.with_label_values(&[&op_code.to_string()]).inc();
             warn!("Unhandled OP: {}", op_code);
+            MongoMessage::None
         },
-    }
-    Ok(MongoMessage::None)
+    };
+
+    Ok(msg)
 }
 
 #[cfg(test)]

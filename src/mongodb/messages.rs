@@ -2,7 +2,6 @@ use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{self, Read, BufRead, Write, Cursor};
 use std::fmt;
 use log::{warn,info,debug};
-use num_derive::FromPrimitive;
 use crate::bson_lite::{self,FieldSelector,BsonLiteDocument,read_cstring};
 
 extern crate bson;
@@ -43,7 +42,6 @@ lazy_static! {
 }
 
 #[derive(Debug)]
-#[derive(FromPrimitive)]
 pub enum OpCode{
     OpReply = 1,
     OpUpdate = 2001,
