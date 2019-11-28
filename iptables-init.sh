@@ -1,5 +1,7 @@
 #!/bin/sh
 
+set -e
+
 # Don't redirect anything for the proxy process itself to avoid endless loop.
 # Also, avoid the proxy looping back to itself if someone tries a direct a direct
 # connection to the proxy port.
