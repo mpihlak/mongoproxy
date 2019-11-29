@@ -8,16 +8,13 @@ use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
 use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
-use hyper::{Request, Response, Body, header::CONTENT_TYPE};
-use hyper::server::Server;
-use hyper::rt::Future;
-use hyper_router::{Route, RouterBuilder, RouterService};
 use rustracing_jaeger::{Tracer};
 use log::{info,warn,error,debug};
 use env_logger;
 use lazy_static::lazy_static;
 
 #[macro_use] extern crate prometheus;
+#[macro_use] extern crate rouille;
 
 use mongoproxy::tracing;
 use mongoproxy::dstaddr;
@@ -383,48 +380,27 @@ fn format_client_address(sockaddr: &SocketAddr) -> String {
 }
 
 pub fn start_admin_listener(endpoint: &str) {
-    let server = Server::bind(&endpoint.parse().unwrap())
-        .serve(router_service)
-        .map_err(|e| eprintln!("Metrics server error: {}", e));
-
-    thread::spawn(|| hyper::rt::run(server));
-}
-
-fn router_service() -> Result<RouterService, std::io::Error> {
-    let router = RouterBuilder::new()
-        .add(Route::get("/").using(root_handler))
-        .add(Route::get("/health").using(health_handler))
-        .add(Route::get("/metrics").using(metrics_handler))
-        .build();
-
-    Ok(RouterService::new(router))
-}
-
-fn root_handler(_: Request<Body>) -> Response<Body> {
-    Response::builder()
-        .status(200)
-        .header(CONTENT_TYPE, "text/html")
-        .body(Body::from("<a href='/metrics'>/metrics</a>\n<br>\n<a href='/health'>/health</a>"))
-        .expect("Failed to construct the response")
-}
-
-fn health_handler(_: Request<Body>) -> Response<Body> {
-    Response::builder()
-        .status(200)
-        .header(CONTENT_TYPE, "text/plain")
-        .body(Body::from("OK"))
-        .expect("Failed to construct the response")
-}
-
-fn metrics_handler(_: Request<Body>) -> Response<Body> {
-    let encoder = TextEncoder::new();
-    let metric_families = prometheus::gather();
-    let mut buffer = vec![];
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-
-    Response::builder()
-        .status(200)
-        .header(CONTENT_TYPE, encoder.format_type())
-        .body(Body::from(buffer))
-        .expect("Failed to construct the response")
+    let endpoint = endpoint.to_owned();
+    thread::spawn(||
+        rouille::start_server(endpoint, move |request| {
+            router!(request,
+                (GET) (/) => {
+                    rouille::Response::html(
+                        "<a href='/metrics'>metrics</a>\n<br>\n\
+                         <a href='/health'>health</a>\n")
+                },
+                (GET) (/health) => {
+                    rouille::Response::text("OK")
+                },
+                (GET) (/metrics) => {
+                    let encoder = TextEncoder::new();
+                    let metric_families = prometheus::gather();
+                    let mut buffer = vec![];
+                    encoder.encode(&metric_families, &mut buffer).unwrap();
+                    rouille::Response::from_data("text/plain", buffer)
+                },
+                _ => rouille::Response::empty_404()
+            )
+        })
+    );
 }
