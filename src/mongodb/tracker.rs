@@ -78,6 +78,13 @@ lazy_static! {
             OP_LABELS,
             vec![128.0, 1024.0, 16384.0, 131_072.0, 1_048_576.0]).unwrap();
 
+    static ref CLIENT_REQUEST_SIZE_TOTAL: HistogramVec =
+    register_histogram_vec!(
+        "mongoproxy_client_request_bytes_total",
+        "Size of the client request",
+        OP_LABELS,
+        vec![128.0, 1024.0, 16384.0, 131_072.0, 1_048_576.0]).unwrap();
+
     static ref SERVER_RESPONSE_ERRORS_TOTAL: CounterVec =
         register_counter_vec!(
             "mongoproxy_server_response_errors_total",
@@ -115,10 +122,11 @@ struct ClientRequest {
     db: String,
     coll: String,
     span: Span<SpanContextState>,
+    message_length: usize,
 }
 
 impl ClientRequest {
-    fn from(tracker: &MongoStatsTracker, msg: MongoMessage) -> Self {
+    fn from(tracker: &MongoStatsTracker, message_length: usize, msg: MongoMessage) -> Self {
         let message_time = Instant::now();
         let mut op = String::from("");
         let mut db = String::from("");
@@ -197,6 +205,7 @@ impl ClientRequest {
             op,
             message_time,
             span,
+            message_length,
         }
     }
 
@@ -275,7 +284,7 @@ impl MongoStatsTracker{
 
             // Keep the client request so that we can keep track to which request
             // a server response belongs to.
-            let req = ClientRequest::from(&self, msg);
+            let req = ClientRequest::from(&self, hdr.message_length, msg);
             self.client_request_map.insert(hdr.request_id, req);
             RESPONSE_MATCH_HASHMAP_CAPACITY.set(self.client_request_map.capacity() as f64);
         }
@@ -313,6 +322,9 @@ impl MongoStatsTracker{
         SERVER_RESPONSE_SIZE_TOTAL
             .with_label_values(&self.label_values(&client_request))
             .observe(hdr.message_length as f64);
+        CLIENT_REQUEST_SIZE_TOTAL
+            .with_label_values(&self.label_values(&client_request))
+            .observe(client_request.message_length as f64);
 
         // Look into the server response and exract some counters from it.
         // Things like number of documents returned, inserted, updated, deleted.
