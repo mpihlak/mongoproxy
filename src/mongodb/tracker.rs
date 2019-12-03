@@ -55,7 +55,7 @@ lazy_static! {
             "mongoproxy_response_latency_seconds",
             "Backend response latency to first byte",
             OP_LABELS,
-            vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]).unwrap();
+            vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 60.0]).unwrap();
 
     static ref DOCUMENTS_RETURNED_TOTAL: HistogramVec =
         register_histogram_vec!(
