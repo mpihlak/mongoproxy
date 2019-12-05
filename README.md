@@ -1,43 +1,46 @@
 # Mongoproxy the Observable
-There are many MongoDb proxies, but this one is about observability. It passes bytes between client and the server and keeps track of latencies, response sizes, document counts and exposes them as Prometheus metrics. It also does Jaeger tracing if the client passes trace id in the `$comment` field of the operation.
+There are many MongoDb proxies, but this one is about observability. It passes bytes between client and the server and keeps track of latencies, response sizes, document counts and exposes them as Prometheus metrics. It also does Jaeger tracing if the client passes a trace id in the `$comment` field of the operation.
 
-It does not meddle with the traffic, but passes bytes between the application and the database as they are.
+All bytes are passed through unchanged.
 
 ## Current state
-Works pretty well. That is, doesn't crash and collects useful metrics. Performance overhead is minimal, memory usage depends on the max request/response size (currently needs to have the whole BSON in memory for parsing).
+Works pretty damn well. That is, doesn't crash and collects useful metrics. Performance overhead is minimal, memory usage depends on the max request/response size (currently needs to have the whole BSON in memory for parsing). 
 
-Runs a thread per-connection, so may run into trouble with large number of connections. Maybe move it to Tokio once the async/await stuff stabilizes there.
+Since it uses a thread per connection, `MALLOC_ARENA_MAX` needs to be tuned to avoid excessive memory usage due to how `malloc()` handles per-thread arenas. 2 is a good starting value.
 
-Jaeger tracing is experimental, but I've seen it work. See below for a screenshot.
+Jaeger tracing is still experimental. It does generate traces but the interface is likely to change in the future. Specifically, the `$comment` field could be used for passing along other information as well (eg. additional Prometheus labels, function name, file:line, etc.).
 
 ## Usage
+
+### Sidecar with iptables port forwarding
+```
+mongoproxy --proxy 27111
+```
+
+This mode is used when running the proxy as a sidecar on a K8s pod. `iptables` rules need to be set up to redirect all port 27017 traffic through the proxy. The proxy then determines the original destination address via `getsockopt` and forwards the requests to its original destination. Because it captures all traffic to Mongo ports, it automatically supports replicaset connections.
+
+See the [manually added](examples/sidecar) or [automatically injected](examples/k8s-sidecar-injector) sidecar examples.
 
 ### Static proxy with pre-determined server address
 ```
 mongoproxy --proxy 27113:localhost:27017
 ```
-This will proxy all requests on port `27113` to a fixed MongoDb instance running on `localhost:27017`. Useful when running this as a front-proxy that is shared by many cliints. Does not support replica sets, as replicaset connections can be redirected to any host in the set.
+This will proxy all requests on port `27113` to a fixed MongoDb instance running on `localhost:27017`. Useful when running as a shared front-proxy. However this mode does not easily support replica sets, as replicaset connections can be redirected to any host in the set.
 
-More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or `debug`. Add `RUST_BACKTRACE=1` for troubleshooting those (rare) crashes.
+See the [front proxy](examples/front-proxy) example.
 
-### Dynamic proxy
+### With Jaeger tracing
 ```
-mongoproxy --proxy 27111
-```
-
-This mode is used when running the proxy as a sidecar on a K8s deployment. `iptables` rules need to be set up to redirect all port 27017 traffic through the proxy. The proxy then determines the original destination address via `getsockopt` and forwards the requests to its destination. Because it captures all traffic to Mongo ports, it also supports replicaset connections.
-
-NB! This mode is unusable without NAT or port-redirection, so don't try it. Also requires `getsockopt` that supports `SO_ORIGINAL_DST` option.
-
-### Dynamic proxy with Jaeger tracing
-```
-mongoproxy --proxy 27111 \
+mongoproxy --proxy 27113:localhost:27017 \
     --service-name mongoproxy-ftw \
     --enable-jaeger \
     --jaeger-addr localhost:6831
 ```
 
 Same as above but with Jaeger tracing enabled. Spans will be sent to collector on `localhost:6831`. The service name for the traces is set to `mongoproxy-ftw`.
+
+### Other tips
+More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or `debug`. Add `RUST_BACKTRACE=1` for troubleshooting those (rare) crashes.
 
 ## Metrics
 
