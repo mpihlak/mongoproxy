@@ -274,6 +274,9 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
     let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), tracer);
     let mut last_time = Instant::now();
 
+    let _ = client_stream.set_nodelay(true);
+    let _ = server_stream.set_nodelay(true);
+
     while !done {
         poll.poll(&mut events, Some(Duration::from_millis(1000))).unwrap();
 
