@@ -6,7 +6,7 @@ use std::time::{Duration,Instant};
 
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
-use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
+use prometheus::{CounterVec,Histogram,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
 use rustracing_jaeger::{Tracer};
 use log::{info,warn,error,debug};
@@ -49,6 +49,18 @@ lazy_static! {
             "mongoproxy_server_connect_time_seconds",
             "Time it takes to look up and connect to a server",
             &["server_addr"]).unwrap();
+
+    static ref CLIENT_TRACKING_TIME_SECONDS: Histogram =
+        register_histogram!(
+            "mongoproxy_client_tracking_time_seconds",
+            "Time spent moving bytes from client to server",
+            vec![0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1]).unwrap();
+
+    static ref SERVER_TRACKING_TIME_SECONDS: Histogram =
+        register_histogram!(
+            "mongoproxy_server_tracking_time_seconds",
+            "Time spent moving bytes from client to server",
+            vec![0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1]).unwrap();
 
     static ref CLIENT_CONNECT_TIME_SECONDS: CounterVec =
         register_counter_vec!(
@@ -269,10 +281,12 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
         for event in events.iter() {
             match event.token() {
                 CLIENT => {
+                    let timer = CLIENT_TRACKING_TIME_SECONDS.start_timer();
                     connection_was_idle = false;
                     let mut track_client = |buf: &[u8]| {
                         tracker.track_client_request(buf);
                     };
+                    timer.observe_duration();
 
                     if !copy_stream_with_fn(&mut client_stream, &mut server_stream, &mut track_client)? {
                         info!("{} client EOF", client_stream.peer_addr()?);
@@ -280,10 +294,12 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
                     }
                 },
                 SERVER => {
+                    let timer = SERVER_TRACKING_TIME_SECONDS.start_timer();
                     connection_was_idle = false;
                     let mut track_server = |buf: &[u8]| {
                         tracker.track_server_response(buf);
                     };
+                    timer.observe_duration();
 
                     if !copy_stream_with_fn(&mut server_stream, &mut client_stream, &mut track_server)? {
                         info!("{} server EOF", server_stream.peer_addr()?);
