@@ -210,7 +210,7 @@ impl MsgOpMsg {
         writer.write_u32::<LittleEndian>(self.flag_bits)?;
 
         let seq_id = "documents";
-        let seq_len = 1 + seq_id.len() + doc_buf.len();
+        let seq_len = 1 + seq_id.len() + doc_buf.len() + 4;
 
         writer.write_u8(1)?;    // "kind" byte
         writer.write_u32::<LittleEndian>(seq_len as u32)?;
