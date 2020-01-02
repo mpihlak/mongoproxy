@@ -355,8 +355,11 @@ impl MongoStatsTracker{
                         // findAndModify always returns at most 1 row, the same as the num of changed rows
                         n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
                         n_docs_changed = n_docs_returned;
-                    } else if section.contains_key("n") && client_request.op != "count" {
-                        // This should happen in response to insert,update,delete,findandmodify
+                    } else if client_request.op == "count" {
+                        // Count also kind of returns documents, record these
+                        n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
+                    } else if section.contains_key("n") {
+                        // Lump the rest of the update operations together
                         let n = if client_request.op == "update" {
                             section.get_i32("n_modified").unwrap_or(0)
                         } else {
