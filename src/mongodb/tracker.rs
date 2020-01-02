@@ -110,7 +110,7 @@ lazy_static! {
         "endSessions", "dropDatabase", "_id", "q"].iter().cloned().collect();
 
     static ref MONGODB_COLLECTION_OPS: HashSet<&'static str> =
-        ["find", "findAndModify", "insert", "delete", "update", "count",
+        ["find", "findAndModify", "findandmodify", "insert", "delete", "update", "count",
         "getMore", "aggregate", "distinct"].iter().cloned().collect();
 }
 
@@ -344,28 +344,43 @@ impl MongoStatsTracker{
                                 .inc();
                         }
                     }
-                    // Calculate number of documents returned from cursor response
-                    if let Some(docs_returned) = section.get_i32("docs_returned") {
-                        client_request.span.set_tag(|| {
-                            Tag::new("documents_returned", docs_returned as i64)
-                        });
-                        DOCUMENTS_RETURNED_TOTAL
-                            .with_label_values(&self.label_values(&client_request))
-                            .observe(docs_returned as f64);
+
+                    let mut n_docs_returned = None;
+                    let mut n_docs_changed = None;
+
+                    if let Some(n) = section.get_i32("docs_returned") {
+                        // Number of documents returned from a cursor operation (find, getMore, etc)
+                        n_docs_returned = Some(n);
+                    } else if client_request.op.to_ascii_lowercase() == "findandmodify" {
+                        // findAndModify always returns at most 1 row, the same as the num of changed rows
+                        n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
+                        n_docs_changed = n_docs_returned;
                     } else if section.contains_key("n") && client_request.op != "count" {
-                        // This should happen in response to insert,update,delete but
-                        // don't bother to check.
-                        let num_rows = if client_request.op == "update" {
+                        // This should happen in response to insert,update,delete,findandmodify
+                        let n = if client_request.op == "update" {
                             section.get_i32("n_modified").unwrap_or(0)
                         } else {
                             section.get_i32("n").unwrap_or(0)
                         };
+                        n_docs_changed = Some(n);
+                    }
+
+                    if let Some(n) = n_docs_returned {
                         client_request.span.set_tag(|| {
-                            Tag::new("documents_changed", num_rows as i64)
+                            Tag::new("documents_returned", n as i64)
+                        });
+                        DOCUMENTS_RETURNED_TOTAL
+                            .with_label_values(&self.label_values(&client_request))
+                            .observe(n as f64);
+                    }
+
+                    if let Some(n) = n_docs_changed {
+                        client_request.span.set_tag(|| {
+                            Tag::new("documents_changed", n as i64)
                         });
                         DOCUMENTS_CHANGED_TOTAL
                             .with_label_values(&self.label_values(&client_request))
-                            .observe(f64::from(num_rows.abs()));
+                            .observe(f64::from(n.abs()));
                     }
                 }
             },
