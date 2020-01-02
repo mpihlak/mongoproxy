@@ -170,8 +170,8 @@ impl MsgOpMsg {
 
                 debug!("section_size={}, seq_id={}", section_size, seq_id);
 
-                // Section size includes the size of the cstring, but not the length bytes
-                let bson_size = section_size - seq_id.len() - 1;
+                // Section size includes the size of the cstring and the length bytes
+                let bson_size = section_size - seq_id.len() - 1 - 4;
                 rdr.take(bson_size as u64).read_to_end(&mut buf)?;
             } else {
                 rdr.read_to_end(&mut buf)?;
