@@ -54,13 +54,13 @@ lazy_static! {
         register_histogram!(
             "mongoproxy_client_tracking_time_seconds",
             "Time spent moving bytes from client to server",
-            vec![0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1]).unwrap();
+            vec![0.000_001, 0.00001, 0.0001, 0.001, 0.01, 0.1]).unwrap();
 
     static ref SERVER_TRACKING_TIME_SECONDS: Histogram =
         register_histogram!(
             "mongoproxy_server_tracking_time_seconds",
             "Time spent moving bytes from client to server",
-            vec![0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1]).unwrap();
+            vec![0.000_001, 0.00001, 0.0001, 0.001, 0.01, 0.1]).unwrap();
 
     static ref CLIENT_CONNECT_TIME_SECONDS: CounterVec =
         register_counter_vec!(
