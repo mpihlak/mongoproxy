@@ -351,36 +351,30 @@ impl MongoStatsTracker{
                     if let Some(n) = section.get_i32("docs_returned") {
                         // Number of documents returned from a cursor operation (find, getMore, etc)
                         n_docs_returned = Some(n);
+                    } else if client_request.op == "count" {
+                        // Count also kind of returns documents, record these
+                        n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
                     } else if client_request.op.to_ascii_lowercase() == "findandmodify" {
                         // findAndModify always returns at most 1 row, the same as the num of changed rows
                         n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
                         n_docs_changed = n_docs_returned;
-                    } else if client_request.op == "count" {
-                        // Count also kind of returns documents, record these
-                        n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
+                    } else if client_request.op == "update" {
+                        // Update uses n_modified to indicate number of docs changed
+                        n_docs_changed = Some(section.get_i32("n_modified").unwrap_or(0));
                     } else if section.contains_key("n") {
                         // Lump the rest of the update operations together
-                        let n = if client_request.op == "update" {
-                            section.get_i32("n_modified").unwrap_or(0)
-                        } else {
-                            section.get_i32("n").unwrap_or(0)
-                        };
-                        n_docs_changed = Some(n);
+                        n_docs_changed = Some(section.get_i32("n").unwrap_or(0));
                     }
 
                     if let Some(n) = n_docs_returned {
-                        client_request.span.set_tag(|| {
-                            Tag::new("documents_returned", n as i64)
-                        });
+                        client_request.span.set_tag(|| Tag::new("documents_returned", n as i64));
                         DOCUMENTS_RETURNED_TOTAL
                             .with_label_values(&self.label_values(&client_request))
                             .observe(n as f64);
                     }
 
                     if let Some(n) = n_docs_changed {
-                        client_request.span.set_tag(|| {
-                            Tag::new("documents_changed", n as i64)
-                        });
+                        client_request.span.set_tag(|| Tag::new("documents_changed", n as i64));
                         DOCUMENTS_CHANGED_TOTAL
                             .with_label_values(&self.label_values(&client_request))
                             .observe(f64::from(n.abs()));
