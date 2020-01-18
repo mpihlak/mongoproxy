@@ -276,10 +276,6 @@ impl MongoStatsTracker{
                         .with_label_values(&[&self.client_application])
                         .inc();
                 }
-                // TODO: The other interesting things here are replicaset name
-                // and possibly also server name (if we have it). This becomes
-                // especially relevant where running the proxy in a sidecar mode
-                // where a single server may serve any number of MongoDb databases.
             }
 
             // Keep the client request so that we can keep track to which request
