@@ -325,6 +325,12 @@ impl MongoStatsTracker{
         // Look into the server response and exract some counters from it.
         // Things like number of documents returned, inserted, updated, deleted.
         // The only interesting messages here are OP_MSG and OP_REPLY.
+        //
+        // Note: tracing "find" commands is more difficult by the fact that if the whole result
+        // is not returned in one go, the subsequent "getMore" commands no longer have the
+        // trace-id and we need to get it from the original "find". This should be done by
+        // the "id" field in the response, but currently we're not keeping track of this.
+
         match msg {
             MongoMessage::Msg(m) => {
                 for section in m.documents {
