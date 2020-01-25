@@ -8,7 +8,7 @@ import os
 import numpy as np
 
 ITEM_COUNT = 1000
-RUN_DURATION = 5
+RUN_DURATION = 3
 
 
 if len(sys.argv) != 2:
@@ -19,7 +19,7 @@ else:
 print(f"Connecting to {mongo_uri}")
 con = pymongo.MongoClient(mongo_uri)
 
-for item_size in [128, 1024, 8192, 16384, 65536, 1048576]:
+for item_size in [128, 1024, 8192, 16384, 65536, 131072, 262144, 524288, 1048576]:
     coll = con['test']['benchmarkdata']
     coll.drop()
     coll.create_index('i', unique=True)
@@ -27,12 +27,12 @@ for item_size in [128, 1024, 8192, 16384, 65536, 1048576]:
         coll.insert_one(dict(i=i, a='x' * item_size))
 
     counter = 0
-    t = end = start = time.time()
+    t = end = start = time.perf_counter()
     latencies = []
     while end - start < RUN_DURATION:
         for res in coll.find({}).limit(1):
             pass
-        end = time.time()
+        end = time.perf_counter()
         latencies.append((end - t) * 1000)
         t = end
         if not res:

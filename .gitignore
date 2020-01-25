@@ -7,3 +7,4 @@ TODO.txt
 *.sw[op]
 docker-build.sh
 .DS_Store
+.vscode/*
