@@ -4,11 +4,13 @@ There are many MongoDb proxies, but this one is about observability. It passes b
 All bytes are passed through unchanged.
 
 ## Current state
-Works pretty damn well. That is, doesn't crash and collects useful metrics. Performance overhead is minimal, memory usage depends on the max request/response size (currently needs to have the whole BSON in memory for parsing). 
+Supports MongoDb 3.6 and greater (`OP_MSG` protocol), and produces throughput and latency metrics both at the network and document level. The legacy `OP_COMMAND` protocol used by some drivers and older Mongo versions is not supported. The proxy won't crash or anything but the collected metrics will be limited to basic network and rps.
+
+Performance overhead is minimal. In sidecar mode, expect to add 3-5% CPU to the Pod and a sub 1ms increase to the latency (small requests). Memory usage depends on the max request/response size (currently needs to have the whole BSON in memory for parsing) and number of active connections. For most well-behaved apps the memory usage should be around few tens of MBs, however I've seen it go up to 100MB with some workloads.
 
 Since it uses a thread per connection, `MALLOC_ARENA_MAX` needs to be tuned to avoid excessive memory usage due to how `malloc()` handles per-thread arenas. 2 is a good starting value.
 
-Jaeger tracing is still experimental. It does generate traces but the interface is likely to change in the future. Specifically, the `$comment` field could be used for passing along other information as well (eg. additional Prometheus labels, function name, file:line, etc.).
+Jaeger tracing is still experimental. It does generate traces, but the interface is likely to change in the future. Specifically, the `$comment` field could be used for passing along other information as well (eg. additional Prometheus labels, function name, file:line, etc.).
 
 ## Usage
 
@@ -70,6 +72,3 @@ Mongoproxy will not create tracing spans unless the application explicitly reque
 
 ![Trace example](https://github.com/mpihlak/mongoproxy/blob/master/img/trace.png)
 
-## Notes
-
-MongoDb `OP_COMMAND` protocol is not supported. This makes the proxy mostly unusable for MongoDb versions < `3.5`.
