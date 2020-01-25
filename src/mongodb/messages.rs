@@ -34,6 +34,7 @@ lazy_static! {
             //   driver: { name: "MongoDB Internal Client", version: "4.0.2" },
             //   os: { type: "Darwin", name: "Mac OS X", architecture: "x86_64", version: "18.7.0" } } }
             .with("app_name", "/client/application/name")
+            .with("cursor_id", "/cursor/id")
             .with("docs_returned", "/cursor/firstBatch/[]")     // array length
             .with("docs_returned", "/cursor/nextBatch/[]")      // array length
             .with("n", "/n")
