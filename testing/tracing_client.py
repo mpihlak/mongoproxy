@@ -24,46 +24,53 @@ if __name__ == "__main__":
 
     tracer = config.initialize_tracer()
 
-    con = pymongo.MongoClient("mongodb://localhost:27111/?appName=tracing_client")
-    bigcollection = con['test']['bigcollection']
+    con = pymongo.MongoClient("mongodb://localhost:27113/?appName=tracing_client")
+    coll = con['test']['kittens']
 
     def span_as_text(span):
         text_map = {}
         tracer.inject(span_context=span, format=Format.TEXT_MAP, carrier=text_map)
         return ''.join(["%s:%s" % (k,v) for k, v in text_map.iteritems()])
 
-    print("Deleting")
-    with tracer.start_span('Deleting data') as span:
-        span_text = span_as_text(span)
-        print("Injected span: %s" % span_text)
-        for i in range(10):
-            bigcollection.remove({
-                 "a": "bbbbbbbbbbbbbbbbbbbb",
-                 "$comment": span_text
-            })
+    coll = con['test']['kittens']
 
-    print("Inserting")
-    with tracer.start_span('Inserting data') as span:
-        span_text = span_as_text(span)
-        print("Injected span: %s" % span_text)
-        for i in range(10):
-            bigcollection.insert_one({
-                 "a": "bbbbbbbbbbbbbbbbbbbb",
-                 "b": "CCCCCCCCCCCCCCCCCC",
-                 # Insert does not take $comment
-            })
+    with tracer.start_span('Trace operations') as root_span:
+        print("Cleaning up")
+        with tracer.start_span('Delete data', root_span) as span:
+            span_text = span_as_text(span)
+            coll.delete_many({ "$comment": span_text })
 
-    print("Fetching")
-    with tracer.start_span('Fetching data') as span:
-        span_text = span_as_text(span)
-        print("Injected span: %s" % span_text)
-        for i in range(3):
-            list(bigcollection.find({}).limit(1000).comment(span_text))
+        print("Inserting")
+        with tracer.start_span('Insert data', root_span) as span:
+            span_text = span_as_text(span)
+            for i in range(110):
+                # Insert does not actually take a $comment so we just skip
+                # it's not that interesting op anyway.
+                coll.insert({"name": "Purry", "number": i })
 
-    print("Fetching with invalid span")
-    list(bigcollection.find({}).limit(1000).comment("uber-trace-id"))
-    list(bigcollection.find({}).limit(1000).comment("uber-trace-id:"))
-    list(bigcollection.find({}).limit(1000).comment("uber-trace-id:x"))
+        print("Fetching exactly 101")
+        with tracer.start_span('Fetching 101', root_span) as span:
+            span_text = span_as_text(span)
+            # Note: this uses limit() which is not exactly the same as fetching
+            # from a collection that has exactly 101 documents. In that case the
+            # "find" would actually be followed by empty "getMore"
+            for r in coll.find({}).comment(span_text).limit(101):
+                pass
+
+        print("Fetching All")
+        with tracer.start_span('Fetching All', root_span) as span:
+            span_text = span_as_text(span)
+            for r in coll.find({}).comment(span_text):
+                pass
+
+        print("Aggregate query")
+        with tracer.start_span('Aggregate fetch', root_span) as span:
+            span_text = span_as_text(span)
+            for r in coll.aggregate([
+                { "$match": { "name": "Purry", "$comment": span_text } },
+                { "$group": { "_id": "$number", "total": { "$sum": "$number" } } },
+                { "$sort": { "total": -1 } } ]):
+                pass
 
     time.sleep(2)
     tracer.close()
