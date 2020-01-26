@@ -144,7 +144,7 @@ impl ClientRequest {
                 // the doc so we only look at first key of each section.
                 for s in m.documents.iter() {
                     if let Some(_op) = s.get_str("op") {
-                        op = _op;
+                        op = _op.to_owned();
                         if MONGODB_COLLECTION_OPS.contains(op.as_str()) {
                             if let Some(collection) = s.get_str("op_value") {
                                 coll = collection.to_owned();
@@ -187,7 +187,7 @@ impl ClientRequest {
                         }
                     } else if let Some(comm) = s.get_str("comment") {
                         debug!("Have a comment field: {}", comm);
-                        match tracing::extract_from_text(comm.as_str()) {
+                        match tracing::extract_from_text(comm) {
                             Ok(Some(parent)) => {
                                 debug!("Extracted trace header: {:?}", parent);
                                 if let Some(tracer) = &tracker.tracer {
@@ -303,7 +303,7 @@ impl MongoStatsTracker{
 
             if self.client_application.is_empty() {
                 if let Some(app_name) = extract_app_name(&msg) {
-                    self.client_application = app_name;
+                    self.client_application = app_name.to_owned();
                     APP_CONNECTION_COUNT_TOTAL
                         .with_label_values(&[&self.client_application])
                         .inc();
@@ -418,7 +418,7 @@ impl MongoStatsTracker{
                             debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
                             self.client_trace_map.remove(&client_request.cursor_id);
                         } else {
-                            if section.get_str_ref("op").unwrap_or("") == "cursor" {
+                            if section.get_str("op").unwrap_or("") == "cursor" {
                                 // This is a first batch for this cursor. If we have a parent
                                 // trace we need to associate this with the cursor id so that
                                 // subsequent "getMore" operations can create spans off it.
@@ -453,10 +453,10 @@ impl MongoStatsTracker{
         if let Some(op) = doc.get_str("op") {
             if op == "hosts" {
                 if let Some(replicaset) = doc.get_str("replicaset") {
-                    self.replicaset = replicaset;
+                    self.replicaset = replicaset.to_owned();
                 }
                 if let Some(server_host) = doc.get_str("server_host") {
-                    self.server_host = server_host;
+                    self.server_host = server_host.to_owned();
                 }
             }
         }
@@ -465,7 +465,7 @@ impl MongoStatsTracker{
 }
 
 /// Extract `appname` from MongoDb `isMaster` query
-fn extract_app_name(msg: &MongoMessage) -> Option<String> {
+fn extract_app_name(msg: &MongoMessage) -> Option<&str> {
     if let MongoMessage::Query(m) = msg {
         if let Some(op) = m.query.get_str("op") {
             if op == "isMaster" || op == "ismaster" {

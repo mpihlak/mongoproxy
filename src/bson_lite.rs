@@ -108,16 +108,7 @@ impl BsonLiteDocument {
         }
     }
 
-    pub fn get_str(&self, key: &str) -> Option<String> {
-        if let Some(s) = self.doc.get(key) {
-            if let BsonValue::String(result) = s {
-                return Some(result.clone())
-            }
-        }
-        None
-    }
-
-    pub fn get_str_ref(&self, key: &str) -> Option<&str> {
+    pub fn get_str(&self, key: &str) -> Option<&str> {
         if let Some(s) = self.doc.get(key) {
             if let BsonValue::String(result) = s {
                 return Some(result)
