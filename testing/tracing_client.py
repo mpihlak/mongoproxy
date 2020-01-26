@@ -63,6 +63,12 @@ if __name__ == "__main__":
             for r in coll.find({}).comment(span_text):
                 pass
 
+        print("Fetching with batch size")
+        with tracer.start_span('Small batch fetch', root_span) as span:
+            span_text = span_as_text(span)
+            for r in coll.find({}).batch_size(50).comment(span_text):
+                pass
+
         print("Aggregate query")
         with tracer.start_span('Aggregate fetch', root_span) as span:
             span_text = span_as_text(span)
