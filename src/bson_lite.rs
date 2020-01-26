@@ -453,6 +453,7 @@ mod tests {
         let selector = FieldSelector::build()
             .with("first", "/@1")
             .with("array_len", "/array/[]")
+            .with("array_first", "/array/@1")
             .with("last", "/last");
         println!("matching fields: {:?}", selector);
 
@@ -461,7 +462,46 @@ mod tests {
 
         assert_eq!("foo", doc.get_str("first").unwrap());
         assert_eq!(2, doc.get_i32("array_len").unwrap());
+        assert_eq!("blah", doc.get_str("array_first").unwrap());
         assert_eq!(2.7, doc.get_float("last").unwrap());
+    }
+
+    #[test]
+    fn test_nested_array() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let mut doc = bson::Document::new();
+
+        let mut arr = Array::new();
+        let mut nested_doc = bson::Document::new();
+        nested_doc.insert("foo".to_owned(), 42);
+        nested_doc.insert("bar".to_owned(), 43);
+        arr.push(Bson::Document(nested_doc));
+        let mut nested_doc = bson::Document::new();
+        nested_doc.insert("foo".to_owned(), 44);
+        nested_doc.insert("bar".to_owned(), 45);
+        nested_doc.insert("baz".to_owned(), 46);
+        arr.push(Bson::Document(nested_doc));
+
+        doc.insert("array".to_string(), Bson::Array(arr));
+
+        let mut buf = Vec::new();
+        bson::encode_document(&mut buf, &doc).unwrap();
+        println!("original: {}", &doc);
+
+        let selector = FieldSelector::build()
+            .with("array_len", "/array/[]")
+            .with("array_first_foo", "/array/0/foo")
+            .with("array_any_baz", "/array/*/baz");
+
+        println!("matching fields: {:?}", selector);
+
+        let doc = decode_document(&buf[..], &selector).unwrap();
+        println!("decoded: {}", &doc);
+
+        assert_eq!(2, doc.get_i32("array_len").unwrap());
+        assert_eq!(42, doc.get_i32("array_first_foo").unwrap());
+        // assert_eq!(46, doc.get_i32("array_any_baz").unwrap());
     }
 
     use std::io::{Cursor};
