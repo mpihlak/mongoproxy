@@ -117,6 +117,15 @@ impl BsonLiteDocument {
         None
     }
 
+    pub fn get_str_ref(&self, key: &str) -> Option<&str> {
+        if let Some(s) = self.doc.get(key) {
+            if let BsonValue::String(result) = s {
+                return Some(result)
+            }
+        }
+        None
+    }
+
     #[allow(dead_code)]
     pub fn get_float(&self, key: &str) -> Option<f64> {
         if let Some(s) = self.doc.get(key) {
@@ -130,6 +139,15 @@ impl BsonLiteDocument {
     pub fn get_i32(&self, key: &str) -> Option<i32> {
         if let Some(s) = self.doc.get(key) {
             if let BsonValue::Int32(result) = s {
+                return Some(*result)
+            }
+        }
+        None
+    }
+
+    pub fn get_i64(&self, key: &str) -> Option<i64> {
+        if let Some(s) = self.doc.get(key) {
+            if let BsonValue::Int64(result) = s {
                 return Some(*result)
             }
         }
