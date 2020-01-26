@@ -50,6 +50,12 @@ lazy_static! {
             "Response to request mapping HashMap size"
             ).unwrap();
 
+    static ref CURSOR_TRACE_PARENT_HASHMAP_CAPACITY: Gauge =
+    register_gauge!(
+        "mongoproxy_cursor_trace_hashmap_capacity_total",
+        "Cursor trace parent mapping HashMap size"
+        ).unwrap();
+
     static ref SERVER_RESPONSE_LATENCY_SECONDS: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_response_latency_seconds",
@@ -411,8 +417,11 @@ impl MongoStatsTracker{
                         if cursor_id == 0 {
                             // So this is the last batch in this cursor, we need to remove
                             // the parent trace from the parent trace map to prevent leaks.
-                            debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
-                            self.cursor_trace_parent.remove(&client_request.cursor_id);
+                            // Some exact querys never do a getMore, so ignore these.
+                            if client_request.cursor_id != 0 {
+                                debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
+                                self.cursor_trace_parent.remove(&client_request.cursor_id);
+                            }
                         } else if client_request.op == "find" || client_request.op == "aggregate" {
                             // This is a first call of a cursor operation. We take it's trace
                             // span and associate it with cursor id so that subsequent getMore
@@ -426,6 +435,7 @@ impl MongoStatsTracker{
                                 debug!("Saving parent trace for cursor {}", cursor_id);
                                 let span = std::mem::replace(&mut client_request.span, None);
                                 self.cursor_trace_parent.insert(cursor_id, span.unwrap());
+                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(self.cursor_trace_parent.capacity() as f64);
                             }
                         }
                     }
