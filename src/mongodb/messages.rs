@@ -21,11 +21,11 @@ lazy_static! {
             // The following are returned as a response to "isMaster"
             .with("replicaset", "/setName")
             .with("server_host", "/me")
-            // TODO: Handle comments for "aggregate" command
-            // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "foo" }
             .with("comment", "/comment")
             .with("comment", "/q/$comment")
             .with("comment", "/query/$comment")
+            // TODO: Handle $comments for "aggregate" command, no matter where in the "pipeline"
+            .with("comment", "/pipeline/0/$match/$comment")
             // The first isMaster response also contains connection metadata, we want the appname from there:
             // { isMaster: 1, client: { application: { name: "kala" },
             //   driver: { name: "MongoDB Internal Client", version: "4.0.2" },
