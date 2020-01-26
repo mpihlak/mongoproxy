@@ -6,7 +6,7 @@ use crate::tracing;
 use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
-use log::{debug,warn};
+use log::{debug,info,warn};
 use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
 
 use rustracing::span::Span;
@@ -105,7 +105,7 @@ lazy_static! {
 
     static ref IGNORE_MONGODB_OPS: HashSet<&'static str> =
         ["isMaster", "ismaster", "ping", "whatsmyuri", "buildInfo", "buildinfo",
-        "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus",
+        "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus", "killCursors",
         "listDatabases", "listIndexes", "createIndexes", "listCollections", "replSetGetStatus",
         "endSessions", "dropDatabase", "_id", "q"].iter().cloned().collect();
 
@@ -121,7 +121,9 @@ struct ClientRequest {
     op: String,
     db: String,
     coll: String,
+    cursor_id: i64,
     span: Span<SpanContextState>,
+    parent_span: Option<rustracing::span::SpanContext<SpanContextState>>,
     message_length: usize,
 }
 
@@ -131,7 +133,9 @@ impl ClientRequest {
         let mut op = String::from("");
         let mut db = String::from("");
         let mut coll = String::from("");
+        let mut cursor_id = 0;
         let mut span = Span::inactive();
+        let mut parent_span = None;
 
         match msg {
             MongoMessage::Msg(m) => {
@@ -158,21 +162,45 @@ impl ClientRequest {
                     if let Some(have_db) = s.get_str("db") {
                         db = have_db.to_string();
                     }
-                    if let Some(comm) = s.get_str("comment") {
-                        debug!("Have a comment field: {}", comm);
-                        match tracing::extract_from_text(comm.as_str()) {
-                            Ok(Some(parent_span)) => {
-                                debug!("Extracted trace header: {:?}", parent_span);
+
+                    // If this is a getMore operation then it will not have a client provided
+                    // trace id. Instead we need use the parent trace that was provided in
+                    // a prior "find" or "aggregate" operation. So look it up.
+                    if op == "getMore" {
+                        if let Some(cursor) = s.get_i64("op_value") {
+                            cursor_id = cursor;
+                            debug!("getMore for cursor {}", cursor_id);
+                            if let Some(parent) = tracker.client_trace_map.get(&cursor_id) {
                                 if let Some(tracer) = &tracker.tracer {
+                                    info!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
                                     span = tracer
                                         .span(op.to_owned())
-                                        .child_of(&parent_span)
+                                        .child_of(parent)
                                         .tag(Tag::new("appName", tracker.client_application.clone()))
                                         .tag(Tag::new("client", tracker.client_addr.clone()))
                                         .tag(Tag::new("server", tracker.server_addr.clone()))
                                         .tag(Tag::new("collection", coll.to_owned()))
                                         .tag(Tag::new("db", db.to_owned()))
                                         .start();
+                                }
+                            }
+                        }
+                    } else if let Some(comm) = s.get_str("comment") {
+                        debug!("Have a comment field: {}", comm);
+                        match tracing::extract_from_text(comm.as_str()) {
+                            Ok(Some(parent)) => {
+                                debug!("Extracted trace header: {:?}", parent);
+                                if let Some(tracer) = &tracker.tracer {
+                                    span = tracer
+                                        .span(op.to_owned())
+                                        .child_of(&parent)
+                                        .tag(Tag::new("appName", tracker.client_application.clone()))
+                                        .tag(Tag::new("client", tracker.client_addr.clone()))
+                                        .tag(Tag::new("server", tracker.server_addr.clone()))
+                                        .tag(Tag::new("collection", coll.to_owned()))
+                                        .tag(Tag::new("db", db.to_owned()))
+                                        .start();
+                                    parent_span = Some(parent);
                                 }
                             },
                             other => {
@@ -203,8 +231,10 @@ impl ClientRequest {
             coll,
             db,
             op,
+            cursor_id,
             message_time,
             span,
+            parent_span,
             message_length,
         }
     }
@@ -227,6 +257,7 @@ pub struct MongoStatsTracker {
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
+    client_trace_map:       HashMap<i64, rustracing::span::SpanContext<SpanContextState>>,
     replicaset:             String,
     server_host:            String,
     tracer:                 Option<Tracer>,
@@ -250,6 +281,7 @@ impl MongoStatsTracker{
             client_addr: client_addr.to_string(),
             server_addr: server_addr.to_string(),
             client_request_map: HashMap::new(),
+            client_trace_map: HashMap::new(),
             client_application: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
@@ -325,11 +357,6 @@ impl MongoStatsTracker{
         // Look into the server response and exract some counters from it.
         // Things like number of documents returned, inserted, updated, deleted.
         // The only interesting messages here are OP_MSG and OP_REPLY.
-        //
-        // Note: tracing "find" commands is more difficult by the fact that if the whole result
-        // is not returned in one go, the subsequent "getMore" commands no longer have the
-        // trace-id and we need to get it from the original "find". This should be done by
-        // the "id" field in the response, but currently we're not keeping track of this.
 
         match msg {
             MongoMessage::Msg(m) => {
@@ -380,6 +407,27 @@ impl MongoStatsTracker{
                         DOCUMENTS_CHANGED_TOTAL
                             .with_label_values(&self.label_values(&client_request))
                             .observe(f64::from(n.abs()));
+                    }
+
+                    // Handle the span creation for the cursor operations.
+                    if let Some(cursor_id) = section.get_i64("cursor_id") {
+                        if cursor_id == 0 {
+                            // So this is the last batch in this cursor, we need to remove
+                            // the parent trace from the parent trace map to prevent leaks.
+                            // TODO: Instead we need to use a saved cursor_id here
+                            debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
+                            self.client_trace_map.remove(&client_request.cursor_id);
+                        } else {
+                            if section.get_str_ref("op").unwrap_or("") == "cursor" {
+                                // This is a first batch for this cursor. If we have a parent
+                                // trace we need to associate this with the cursor id so that
+                                // subsequent "getMore" operations can create spans off it.
+                                if let Some(ref parent) = client_request.parent_span {
+                                    self.client_trace_map.insert(cursor_id, parent.clone());
+                                    debug!("Saving parent trace for cursor {}", cursor_id);
+                                }
+                            }
+                        }
                     }
                 }
             },
