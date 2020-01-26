@@ -21,11 +21,8 @@ lazy_static! {
             // The following are returned as a response to "isMaster"
             .with("replicaset", "/setName")
             .with("server_host", "/me")
-            // TODO: Some operations only set $comment field in the request document (count, update, remove).
-            // Examples:
-            // { q: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, limit: 0 }
-            // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "Don't allow negative inputs." } ...
-            // { count: "kala", query: { aa: 2, $comment: "uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1" }, ...
+            // TODO: Handle comments for "aggregate" command
+            // { aggregate: "records", pipeline: [{ $match: { x: { $gt: 0 }, $comment: "foo" }
             .with("comment", "/comment")
             .with("comment", "/q/$comment")
             .with("comment", "/query/$comment")
