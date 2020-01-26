@@ -122,7 +122,7 @@ struct ClientRequest {
     db: String,
     coll: String,
     cursor_id: i64,
-    span: Span<SpanContextState>,
+    span: Option<Span<SpanContextState>>,
     message_length: usize,
 }
 
@@ -133,7 +133,7 @@ impl ClientRequest {
         let mut db = String::from("");
         let mut coll = String::from("");
         let mut cursor_id = 0;
-        let mut span = Span::inactive();
+        let mut span = None;
 
         match msg {
             MongoMessage::Msg(m) => {
@@ -169,10 +169,10 @@ impl ClientRequest {
                             cursor_id = cursor;
                             if let Some(parent) = tracker.cursor_trace_parent.get(&cursor_id) {
                                 if let Some(tracer) = &tracker.tracer {
-                                    span = tracer
+                                    span = Some(tracer
                                         .span(op.to_owned())
                                         .follows_from(parent)
-                                        .start();
+                                        .start());
                                     debug!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
                                 }
                             }
@@ -183,7 +183,7 @@ impl ClientRequest {
                             Ok(Some(parent)) => {
                                 debug!("Extracted trace header: {:?}", parent);
                                 if let Some(tracer) = &tracker.tracer {
-                                    span = tracer
+                                    span = Some(tracer
                                         .span(op.to_owned())
                                         .child_of(&parent)
                                         .tag(Tag::new("appName", tracker.client_application.clone()))
@@ -191,7 +191,7 @@ impl ClientRequest {
                                         .tag(Tag::new("server", tracker.server_addr.clone()))
                                         .tag(Tag::new("collection", coll.to_owned()))
                                         .tag(Tag::new("db", db.to_owned()))
-                                        .start();
+                                        .start());
                                     debug!("Created a new span for {}: parent={:?}", op, parent);
                                 }
                             },
@@ -356,9 +356,11 @@ impl MongoStatsTracker{
 
                     if let Some(ok) = section.get_float("ok") {
                         if ok == 0.0 {
-                            client_request.span.set_tag(|| {
-                                Tag::new("error", true)
-                            });
+                            if let Some(span) = &mut client_request.span {
+                                span.set_tag(|| {
+                                    Tag::new("error", true)
+                                });
+                            }
                             SERVER_RESPONSE_ERRORS_TOTAL
                                 .with_label_values(&self.label_values(&client_request))
                                 .inc();
@@ -387,14 +389,18 @@ impl MongoStatsTracker{
                     }
 
                     if let Some(n) = n_docs_returned {
-                        client_request.span.set_tag(|| Tag::new("documents_returned", n as i64));
+                        if let Some(span) = &mut client_request.span {
+                            span.set_tag(|| Tag::new("documents_returned", n as i64));
+                        }
                         DOCUMENTS_RETURNED_TOTAL
                             .with_label_values(&self.label_values(&client_request))
                             .observe(n as f64);
                     }
 
                     if let Some(n) = n_docs_changed {
-                        client_request.span.set_tag(|| Tag::new("documents_changed", n as i64));
+                        if let Some(span) = &mut client_request.span {
+                            span.set_tag(|| Tag::new("documents_changed", n as i64));
+                        }
                         DOCUMENTS_CHANGED_TOTAL
                             .with_label_values(&self.label_values(&client_request))
                             .observe(f64::from(n.abs()));
@@ -416,10 +422,11 @@ impl MongoStatsTracker{
                             // "getMore" even if the first find is exhaustive. So we're not leaking
                             // those references in this way.
                             //
-                            // TODO: Only do this when we're actually tracing
-                            debug!("Saving parent trace for cursor {}", cursor_id);
-                            let span = std::mem::replace(&mut client_request.span, Span::inactive());
-                            self.cursor_trace_parent.insert(cursor_id, span);
+                            if let Some(_) = client_request.span {
+                                debug!("Saving parent trace for cursor {}", cursor_id);
+                                let span = std::mem::replace(&mut client_request.span, None);
+                                self.cursor_trace_parent.insert(cursor_id, span.unwrap());
+                            }
                         }
                     }
                 }
@@ -429,9 +436,11 @@ impl MongoStatsTracker{
                     // The first isMaster response is an OP_REPLY so we need to look at it
                     self.try_parsing_replicaset(&doc);
                 }
-                client_request.span.set_tag(|| {
-                    Tag::new("documents_returned", r.number_returned as i64)
-                });
+                if let Some(span) = &mut client_request.span {
+                    span.set_tag(|| {
+                        Tag::new("documents_returned", r.number_returned as i64)
+                    });
+                }
                 DOCUMENTS_RETURNED_TOTAL
                     .with_label_values(&self.label_values(&client_request))
                     .observe(f64::from(r.number_returned));
