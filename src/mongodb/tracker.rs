@@ -6,7 +6,7 @@ use crate::tracing;
 use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
-use log::{debug,info,warn};
+use log::{debug,warn};
 use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
 
 use rustracing::span::Span;
@@ -123,7 +123,6 @@ struct ClientRequest {
     coll: String,
     cursor_id: i64,
     span: Span<SpanContextState>,
-    parent_span: Option<rustracing::span::SpanContext<SpanContextState>>,
     message_length: usize,
 }
 
@@ -135,7 +134,6 @@ impl ClientRequest {
         let mut coll = String::from("");
         let mut cursor_id = 0;
         let mut span = Span::inactive();
-        let mut parent_span = None;
 
         match msg {
             MongoMessage::Msg(m) => {
@@ -164,24 +162,18 @@ impl ClientRequest {
                     }
 
                     // If this is a getMore operation then it will not have a client provided
-                    // trace id. Instead we need use the parent trace that was provided in
-                    // a prior "find" or "aggregate" operation. So look it up.
+                    // trace id. Instead we need follow from the span that was created by the
+                    // initial "find" or "aggregate" operation.
                     if op == "getMore" {
                         if let Some(cursor) = s.get_i64("op_value") {
                             cursor_id = cursor;
-                            debug!("getMore for cursor {}", cursor_id);
-                            if let Some(parent) = tracker.client_trace_map.get(&cursor_id) {
+                            if let Some(parent) = tracker.cursor_trace_parent.get(&cursor_id) {
                                 if let Some(tracer) = &tracker.tracer {
-                                    info!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
                                     span = tracer
                                         .span(op.to_owned())
-                                        .child_of(parent)
-                                        .tag(Tag::new("appName", tracker.client_application.clone()))
-                                        .tag(Tag::new("client", tracker.client_addr.clone()))
-                                        .tag(Tag::new("server", tracker.server_addr.clone()))
-                                        .tag(Tag::new("collection", coll.to_owned()))
-                                        .tag(Tag::new("db", db.to_owned()))
+                                        .follows_from(parent)
                                         .start();
+                                    debug!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
                                 }
                             }
                         }
@@ -200,7 +192,7 @@ impl ClientRequest {
                                         .tag(Tag::new("collection", coll.to_owned()))
                                         .tag(Tag::new("db", db.to_owned()))
                                         .start();
-                                    parent_span = Some(parent);
+                                    debug!("Created a new span for {}: parent={:?}", op, parent);
                                 }
                             },
                             other => {
@@ -234,7 +226,6 @@ impl ClientRequest {
             cursor_id,
             message_time,
             span,
-            parent_span,
             message_length,
         }
     }
@@ -257,7 +248,7 @@ pub struct MongoStatsTracker {
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
-    client_trace_map:       HashMap<i64, rustracing::span::SpanContext<SpanContextState>>,
+    cursor_trace_parent:    HashMap<i64, Span<SpanContextState>>,
     replicaset:             String,
     server_host:            String,
     tracer:                 Option<Tracer>,
@@ -281,7 +272,7 @@ impl MongoStatsTracker{
             client_addr: client_addr.to_string(),
             server_addr: server_addr.to_string(),
             client_request_map: HashMap::new(),
-            client_trace_map: HashMap::new(),
+            cursor_trace_parent: HashMap::new(),
             client_application: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
@@ -414,19 +405,21 @@ impl MongoStatsTracker{
                         if cursor_id == 0 {
                             // So this is the last batch in this cursor, we need to remove
                             // the parent trace from the parent trace map to prevent leaks.
-                            // TODO: Instead we need to use a saved cursor_id here
                             debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
-                            self.client_trace_map.remove(&client_request.cursor_id);
-                        } else {
-                            if section.get_str("op").unwrap_or("") == "cursor" {
-                                // This is a first batch for this cursor. If we have a parent
-                                // trace we need to associate this with the cursor id so that
-                                // subsequent "getMore" operations can create spans off it.
-                                if let Some(ref parent) = client_request.parent_span {
-                                    self.client_trace_map.insert(cursor_id, parent.clone());
-                                    debug!("Saving parent trace for cursor {}", cursor_id);
-                                }
-                            }
+                            self.cursor_trace_parent.remove(&client_request.cursor_id);
+                        } else if client_request.op == "find" || client_request.op == "aggregate" {
+                            // This is a first call of a cursor operation. We take it's trace
+                            // span and associate it with cursor id so that subsequent getMore
+                            // operations can follow spans from it.
+                            //
+                            // Note: Currently MongoDb always follows up a "find" operation with
+                            // "getMore" even if the first find is exhaustive. So we're not leaking
+                            // those references in this way.
+                            //
+                            // TODO: Only do this when we're actually tracing
+                            debug!("Saving parent trace for cursor {}", cursor_id);
+                            let span = std::mem::replace(&mut client_request.span, Span::inactive());
+                            self.cursor_trace_parent.insert(cursor_id, span);
                         }
                     }
                 }
