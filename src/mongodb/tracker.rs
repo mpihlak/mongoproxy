@@ -148,7 +148,11 @@ impl ClientRequest {
                 // the doc so we only look at first key of each section.
                 for s in m.documents.iter() {
                     if let Some(_op) = s.get_str("op") {
-                        op = _op.to_owned();
+                        if op == "" {
+                            // TODO: There might be multiple sections present. We use the op
+                            // from the first section but not sure if that is always the correct one
+                            op = _op.to_owned();
+                        }
                         if MONGODB_COLLECTION_OPS.contains(op.as_str()) {
                             if let Some(collection) = s.get_str("op_value") {
                                 coll = collection.to_owned();
@@ -200,9 +204,9 @@ impl ClientRequest {
                                         .tag(Tag::new("op", op.to_owned()))
                                         .start();
 
-                                    for bytes in m.section_bytes.iter() {
+                                    for (i, bytes) in m.section_bytes.iter().enumerate() {
                                         if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
-                                            new_span.set_tag(|| Tag::new("query".to_owned(), doc.to_string()));
+                                            new_span.set_tag(|| Tag::new(format!("query{}", i), doc.to_string()));
                                         }
                                     }
 
