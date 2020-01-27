@@ -143,7 +143,7 @@ impl MsgOpMsg {
         loop {
             let kind = match rdr.read_u8() {
                 Ok(r)   => r,
-                Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                     // This is OK if we've already read at least one doc
                     break;
                 },

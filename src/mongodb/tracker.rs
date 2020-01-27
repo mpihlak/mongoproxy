@@ -431,7 +431,7 @@ impl MongoStatsTracker{
                             // "getMore" even if the first find is exhaustive. So we're not leaking
                             // those references in this way.
                             //
-                            if let Some(_) = client_request.span {
+                            if client_request.span.is_some() {
                                 debug!("Saving parent trace for cursor {}", cursor_id);
                                 let span = std::mem::replace(&mut client_request.span, None);
                                 self.cursor_trace_parent.insert(cursor_id, span.unwrap());
