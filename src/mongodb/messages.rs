@@ -119,8 +119,9 @@ impl fmt::Display for MsgHeader {
 
 #[derive(Debug)]
 pub struct MsgOpMsg {
-    pub flag_bits:  u32,
-    pub documents:   Vec<BsonLiteDocument>,
+    pub flag_bits:          u32,
+    pub documents:          Vec<BsonLiteDocument>,
+    pub section_bytes:      Vec<Vec<u8>>,
 }
 
 impl fmt::Display for MsgOpMsg {
@@ -134,11 +135,12 @@ impl fmt::Display for MsgOpMsg {
 }
 
 impl MsgOpMsg {
-    pub fn from_reader<R: Read+BufRead>(mut rdr: &mut R) -> io::Result<Self> {
+    pub fn from_reader<R: Read+BufRead>(mut rdr: &mut R, trace_msg_body: bool) -> io::Result<Self> {
         let flag_bits = rdr.read_u32::<LittleEndian>()?;
         debug!("flag_bits={:04x}", flag_bits);
 
         let mut documents = Vec::new();
+        let mut section_bytes = Vec::new();
 
         loop {
             let kind = match rdr.read_u8() {
@@ -170,6 +172,12 @@ impl MsgOpMsg {
                 rdr.read_to_end(&mut buf)?;
             }
 
+            // Take a copy of the raw section bytes so that we can use the
+            // contained BSON document for trace annotations.
+            if trace_msg_body {
+                section_bytes.push(buf.clone());
+            }
+
             if cfg!(feature = "log_mongodb_messages") {
                 if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
                     info!("OP_MSG BSON: {}", doc);
@@ -193,7 +201,7 @@ impl MsgOpMsg {
         // Note: there may be checksum following, but we've probably eaten
         // it's bytes while trying to decode the section list.
 
-        Ok(MsgOpMsg{flag_bits, documents})
+        Ok(MsgOpMsg{flag_bits, documents, section_bytes})
     }
 
     #[allow(dead_code)]

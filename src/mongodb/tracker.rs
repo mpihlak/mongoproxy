@@ -189,16 +189,25 @@ impl ClientRequest {
                             Ok(Some(parent)) => {
                                 debug!("Extracted trace header: {:?}", parent);
                                 if let Some(tracer) = &tracker.tracer {
-                                    span = Some(tracer
+                                    let mut new_span = tracer
                                         .span(op.to_owned())
                                         .child_of(&parent)
-                                        .tag(Tag::new("appName", tracker.client_application.clone()))
+                                        .tag(Tag::new("app", tracker.client_application.clone()))
                                         .tag(Tag::new("client", tracker.client_addr.clone()))
                                         .tag(Tag::new("server", tracker.server_addr.clone()))
                                         .tag(Tag::new("collection", coll.to_owned()))
                                         .tag(Tag::new("db", db.to_owned()))
-                                        .start());
+                                        .tag(Tag::new("op", op.to_owned()))
+                                        .start();
+
+                                    for bytes in m.section_bytes.iter() {
+                                        if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
+                                            new_span.set_tag(|| Tag::new("query".to_owned(), doc.to_string()));
+                                        }
+                                    }
+
                                     debug!("Created a new span for {}: parent={:?}", op, parent);
+                                    span = Some(new_span)
                                 }
                             },
                             other => {
@@ -286,11 +295,11 @@ impl MongoStatsTracker{
         }
     }
 
-    pub fn track_client_request(&mut self, buf: &[u8]) {
+    pub fn track_client_request(&mut self, buf: &[u8], trace_msg_body: bool) {
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for (hdr, msg) in self.client.parse_buffer(buf) {
+        for (hdr, msg) in self.client.parse_buffer(buf, trace_msg_body) {
             debug!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
             // Ignore useless messages
@@ -323,7 +332,7 @@ impl MongoStatsTracker{
         CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for (hdr, msg) in self.server.parse_buffer(buf) {
+        for (hdr, msg) in self.server.parse_buffer(buf, false) {
             debug!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
             if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {

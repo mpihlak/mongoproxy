@@ -271,6 +271,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
 
     let mut done = false;
     let client_addr = format_client_address(&client_stream.peer_addr()?);
+    let tracing_enabled = tracer.is_some();
     let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), tracer);
     let mut last_time = Instant::now();
 
@@ -287,7 +288,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
                     let timer = CLIENT_TRACKING_TIME_SECONDS.start_timer();
                     connection_was_idle = false;
                     let mut track_client = |buf: &[u8]| {
-                        tracker.track_client_request(buf);
+                        tracker.track_client_request(buf, tracing_enabled);
                     };
                     timer.observe_duration();
 

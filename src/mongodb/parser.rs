@@ -73,7 +73,7 @@ impl MongoProtocolParser {
     // bytes and parse the message. Once the message is parsed we expect a header again and the
     // process repeats.
     //
-    pub fn parse_buffer(&mut self, buf: &[u8]) -> Vec<(MsgHeader, MongoMessage)> {
+    pub fn parse_buffer(&mut self, buf: &[u8], trace_msg_body: bool) -> Vec<(MsgHeader, MongoMessage)> {
         if !self.parser_active {
             return vec![];
         }
@@ -107,7 +107,7 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                match extract_message(self.header.op_code, &work_buf[..self.want_bytes]) {
+                match extract_message(self.header.op_code, &work_buf[..self.want_bytes], trace_msg_body) {
                     Ok(res) => {
                         result.push((self.header.clone(), res));
                     },
@@ -141,7 +141,7 @@ impl MongoProtocolParser {
     }
 }
 
-fn extract_message(op_code: u32, mut rdr: impl BufRead) -> io::Result<MongoMessage> {
+fn extract_message(op_code: u32, mut rdr: impl BufRead, trace_msg_body: bool) -> io::Result<MongoMessage> {
     OPCODE_COUNTER.with_label_values(&[&op_code.to_string()]).inc();
 
     let msg = match op_code {
@@ -151,7 +151,7 @@ fn extract_message(op_code: u32, mut rdr: impl BufRead) -> io::Result<MongoMessa
         2001 => MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr)?),
         2006 => MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr)?),
         2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr)?),
-        2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr)?),
+        2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr, trace_msg_body)?),
         2010 | 2011 => {
             // This is the internal ping-pong, we don' care
             MongoMessage::None
