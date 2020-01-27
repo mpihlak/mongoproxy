@@ -159,6 +159,9 @@ impl MsgOpMsg {
             // contents for debugging.
 
             let mut buf = Vec::new();
+
+            // This somewhat confusing business with the sections is described at:
+            // https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#id1
             if kind != 0 {
                 let section_size = rdr.read_u32::<LittleEndian>()? as usize;
                 let seq_id = read_cstring(&mut rdr)?;
@@ -169,7 +172,19 @@ impl MsgOpMsg {
                 let bson_size = section_size - seq_id.len() - 1 - 4;
                 rdr.take(bson_size as u64).read_to_end(&mut buf)?;
             } else {
-                rdr.read_to_end(&mut buf)?;
+                // Since there may be multiple back to back kind 0 sections we need to
+                // peek at the BSON document length and only consume this many bytes.
+                // At the next round we'll come back to check the kind byte again and
+                // read the rest of it.
+                //
+                // TODO: Surely there's a more elegant way to peek the first 4 bytes
+                let mut length_bytes = [0 as u8; 4];
+                rdr.read_exact(&mut length_bytes)?;
+                let payload_size = (&mut &length_bytes[..]).read_u32::<LittleEndian>()?;
+
+                debug!("kind=0, payload_size={}", payload_size);
+                buf.extend_from_slice(&length_bytes);
+                rdr.take(payload_size as u64 - 4).read_to_end(&mut buf)?;
             }
 
             // Take a copy of the raw section bytes so that we can use the
