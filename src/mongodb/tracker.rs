@@ -204,9 +204,12 @@ impl ClientRequest {
                                         .tag(Tag::new("op", op.to_owned()))
                                         .start();
 
-                                    for (i, bytes) in m.section_bytes.iter().enumerate() {
+                                    for bytes in m.section_bytes.iter() {
                                         if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
-                                            new_span.set_tag(|| Tag::new(format!("query{}", i),
+                                            // Use the first key in the document as key name
+                                            let doc_first_key = doc.keys().next().unwrap_or(&op);
+                                            new_span.set_tag(|| Tag::new(
+                                                doc_first_key.to_owned(),
                                                 format!("{:.8192}", doc.to_string())));
                                         }
                                     }
