@@ -185,7 +185,7 @@ mod tests {
     }
 
     fn create_message(key: &str, val: &str) -> Vec<u8> {
-        let msg = MsgOpMsg{ flag_bits: 0, documents: Vec::new() };
+        let msg = MsgOpMsg{ flag_bits: 0, documents: Vec::new(), section_bytes: Vec::new() };
 
         let mut doc = bson::Document::new();
         let mut doc_buf = Vec::new();
@@ -206,7 +206,7 @@ mod tests {
         hdr.write(&mut buf[..]).unwrap();
 
         let mut parser = MongoProtocolParser::new();
-        let result = parser.parse_buffer(&buf.to_vec());
+        let result = parser.parse_buffer(&buf.to_vec(), false);
 
         assert_eq!(result.len(), 0);
         assert_eq!(parser.have_header, true);
@@ -225,7 +225,7 @@ mod tests {
         buf.extend(msg_buf);
 
         let mut parser = MongoProtocolParser::new();
-        let result  = parser.parse_buffer(&buf);
+        let result  = parser.parse_buffer(&buf, false);
         assert_eq!(result.len(), 1);
 
         match result.iter().next().unwrap() {
@@ -257,7 +257,7 @@ mod tests {
         // Write the header of the first message and try parse. This must parse
         // the header but return nothing because it doesn't have a message body yet.
         hdr.write(&mut buf).unwrap();
-        let result = parser.parse_buffer(&buf);
+        let result = parser.parse_buffer(&buf, false);
         if result.len() == 0 {
             assert_eq!(parser.have_header, true);
             assert_eq!(parser.header.request_id, 1234);
@@ -279,7 +279,7 @@ mod tests {
 
         // Now the parser must return the parsed first message. It also should have
         // started to parse the bytes for the header of the second message.
-        match parser.parse_buffer(&buf).iter().next().unwrap() {
+        match parser.parse_buffer(&buf, false).iter().next().unwrap() {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
@@ -290,7 +290,7 @@ mod tests {
 
         // Now, the next call with empty buffer must parse the second message header
         // but not return the message itself.
-        match parser.parse_buffer(&[]).is_empty() {
+        match parser.parse_buffer(&[], false).is_empty() {
             true => {
                 assert_eq!(parser.have_header, true);
                 assert_eq!(parser.header.request_id, 5678);
@@ -302,7 +302,7 @@ mod tests {
         // Finally write the seconds message body and expect to parse the full message.
         // Also check that the header matches the second message.
         buf = second_msg_buf.to_vec();
-        match parser.parse_buffer(&buf).iter().next().unwrap() {
+        match parser.parse_buffer(&buf, false).iter().next().unwrap() {
             (h, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(h.request_id, 5678);
@@ -338,7 +338,7 @@ mod tests {
         buf.extend(&msg_buf);
 
         // Parse and validate the messages
-        let result = parser.parse_buffer(&buf);
+        let result = parser.parse_buffer(&buf, false);
         assert_eq!(result.len(), 2);
 
         let mut it = result.iter();
