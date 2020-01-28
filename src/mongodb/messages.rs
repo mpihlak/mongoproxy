@@ -166,7 +166,7 @@ impl MsgOpMsg {
                 let section_size = rdr.read_u32::<LittleEndian>()? as usize;
                 let seq_id = read_cstring(&mut rdr)?;
 
-                debug!("section_size={}, seq_id={}", section_size, seq_id);
+                debug!("kind=1: section_size={}, seq_id={}", section_size, seq_id);
 
                 // Section size includes the size of the cstring and the length bytes
                 let bson_size = section_size - seq_id.len() - 1 - 4;
@@ -177,13 +177,9 @@ impl MsgOpMsg {
                 // At the next round we'll come back to check the kind byte again and
                 // read the rest of it.
                 //
-                // TODO: Surely there's a more elegant way to peek the first 4 bytes
-                let mut length_bytes = [0 as u8; 4];
-                rdr.read_exact(&mut length_bytes)?;
-                let payload_size = (&mut &length_bytes[..]).read_u32::<LittleEndian>()?;
-
-                debug!("kind=0, payload_size={}", payload_size);
-                buf.extend_from_slice(&length_bytes);
+                rdr.take(4).read_to_end(&mut buf)?;
+                let payload_size = (&buf[..]).read_u32::<LittleEndian>()?;
+                debug!("kind=0: payload_size={}", payload_size);
                 rdr.take(payload_size as u64 - 4).read_to_end(&mut buf)?;
             }
 
