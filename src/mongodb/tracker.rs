@@ -206,7 +206,8 @@ impl ClientRequest {
 
                                     for (i, bytes) in m.section_bytes.iter().enumerate() {
                                         if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
-                                            new_span.set_tag(|| Tag::new(format!("query{}", i), doc.to_string()));
+                                            new_span.set_tag(|| Tag::new(format!("query{}", i),
+                                                format!("{:.8192}", doc.to_string())));
                                         }
                                     }
 
