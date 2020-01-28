@@ -72,7 +72,7 @@ if __name__ == "__main__":
         print("Enormous query")
         with tracer.start_span('Enormous query', root_span) as span:
             span_text = span_as_text(span)
-            for r in coll.find({"name": "x" * 1024*1024*4}).comment(span_text):
+            for r in coll.find({"name": "x" * 1024*16}).comment(span_text):
                 pass
 
         print("Aggregate query")
