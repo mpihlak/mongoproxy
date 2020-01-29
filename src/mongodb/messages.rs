@@ -74,6 +74,30 @@ impl fmt::Display for MongoMessage {
     }
 }
 
+#[allow(dead_code)]
+pub fn debug_print(mut rdr: impl Read) -> io::Result<()> {
+    let mut buf = Vec::new();
+
+    rdr.read_to_end(&mut buf)?;
+
+    let mut hex_str = String::new();
+    let mut txt_str = String::new();
+    for (i, b) in buf.iter().enumerate() {
+        hex_str.push_str(&format!("{:02x} ", b));
+        txt_str.push(if *b < 32 || *b > 127 { '.' } else { *b as char });
+        if (i + 1) % 16 == 0 {
+            println!("{}{}", hex_str, txt_str);
+            hex_str.clear();
+            txt_str.clear();
+        }
+    }
+    if !hex_str.is_empty() {
+        println!("{}{}", hex_str, txt_str);
+    }
+
+    Ok(())
+}
+
 #[derive(Debug,Clone,Default)]
 pub struct MsgHeader {
     pub message_length: usize,
