@@ -153,7 +153,8 @@ fn extract_message(op_code: u32, mut rdr: impl BufRead, trace_msg_body: bool) ->
         2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr)?),
         2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr, trace_msg_body)?),
         2010 | 2011 => {
-            // This is the internal ping-pong, we don' care
+            // This is an undocumented legacy protocol that some clients (bad Robo3T)
+            // still use. We ignore it.
             MongoMessage::None
         },
         _ => {
