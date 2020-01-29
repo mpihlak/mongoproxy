@@ -343,6 +343,11 @@ impl MongoStatsTracker{
         for (hdr, msg) in self.server.parse_buffer(buf, false) {
             debug!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
+            // Ignore useless messages
+            if let MongoMessage::None = msg {
+                continue;
+            }
+
             if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
                 self.observe_server_response_to(&hdr, msg, &mut client_request);
                 // If the client_request had a span, it will be automatically sent down the
