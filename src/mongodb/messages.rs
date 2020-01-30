@@ -141,6 +141,11 @@ impl fmt::Display for MsgHeader {
     }
 }
 
+// Response objects implement this trait to be handled as server response
+pub trait ResponseDocuments {
+    fn get_documents(&self) -> &Vec<BsonLiteDocument>;
+}
+
 #[derive(Debug)]
 pub struct MsgOpMsg {
     pub flag_bits:          u32,
@@ -155,6 +160,12 @@ impl fmt::Display for MsgOpMsg {
             writeln!(f, "section {}: {}", i, v)?;
         }
         Ok(())
+    }
+}
+
+impl ResponseDocuments for MsgOpMsg {
+    fn get_documents(&self) -> &Vec<BsonLiteDocument> {
+        &self.documents
     }
 }
 
@@ -425,6 +436,12 @@ impl fmt::Display for MsgOpReply {
             writeln!(f, "document {}: {}", i, v)?;
         }
         Ok(())
+    }
+}
+
+impl ResponseDocuments for MsgOpReply {
+    fn get_documents(&self) -> &Vec<BsonLiteDocument> {
+        &self.documents
     }
 }
 
