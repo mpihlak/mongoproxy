@@ -1,4 +1,4 @@
-use super::messages::{MsgHeader,MongoMessage};
+use super::messages::{MsgHeader,MongoMessage,ResponseDocuments};
 use super::parser::MongoProtocolParser;
 use crate::bson_lite;
 use crate::tracing;
@@ -226,8 +226,17 @@ impl ClientRequest {
                 }
             },
             MongoMessage::Query(m) => {
-                op = String::from("query");
-                ClientRequest::parse_collname(&m.full_collection_name, &mut db, &mut coll)
+                // Despite the name, QUERY can also be insert, update or delete.
+                // Or a ping, so handle these as well.
+                op = String::from(m.query.get_str("op").unwrap_or("query"));
+
+                let pos = m.full_collection_name.find('.').unwrap_or_else(|| m.full_collection_name.len());
+                db = m.full_collection_name[..pos].to_owned();
+
+                if let Some(val) = m.query.get_str("op_value") {
+                    coll = val.to_owned();
+                }
+                debug!("Parsed db={} coll={}", db, coll);
             },
 
             // There is no response to OP_INSERT, DELETE, UPDATE so don't bother
@@ -252,16 +261,6 @@ impl ClientRequest {
             message_length,
         }
     }
-
-    // Parse a fully qualified collection name into "db" and "coll".
-    // Both db and coll are expected to be empty before.
-    fn parse_collname(full_collection_name: &str, db: &mut String, coll: &mut String) {
-        let pos = full_collection_name.find('.').unwrap_or_else(|| full_collection_name.len());
-        let (_db, _coll) = full_collection_name.split_at(pos);
-        db.push_str(_db);
-        coll.push_str(_coll);
-    }
-
 }
 
 pub struct MongoStatsTracker {
@@ -359,8 +358,7 @@ impl MongoStatsTracker{
         }
     }
 
-    fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: MongoMessage, client_request: &mut ClientRequest) {
-
+    fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: MongoMessage, mut client_request: &mut ClientRequest) {
         // TODO: Here we might not yet have the replicaset and server name labels. So possibly
         // move those at the end of this function.
         SERVER_RESPONSE_LATENCY_SECONDS
@@ -376,110 +374,106 @@ impl MongoStatsTracker{
         // Look into the server response and exract some counters from it.
         // Things like number of documents returned, inserted, updated, deleted.
         // The only interesting messages here are OP_MSG and OP_REPLY.
-
         match msg {
             MongoMessage::Msg(m) => {
-                for section in m.documents {
-                    self.try_parsing_replicaset(&section);
-
-                    if let Some(ok) = section.get_float("ok") {
-                        if ok == 0.0 {
-                            if let Some(span) = &mut client_request.span {
-                                span.set_tag(|| {
-                                    Tag::new("error", true)
-                                });
-                            }
-                            SERVER_RESPONSE_ERRORS_TOTAL
-                                .with_label_values(&self.label_values(&client_request))
-                                .inc();
-                        }
-                    }
-
-                    let mut n_docs_returned = None;
-                    let mut n_docs_changed = None;
-
-                    if let Some(n) = section.get_i32("docs_returned") {
-                        // Number of documents returned from a cursor operation (find, getMore, etc)
-                        n_docs_returned = Some(n);
-                    } else if client_request.op == "count" {
-                        // Count also kind of returns documents, record these
-                        n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
-                    } else if client_request.op.to_ascii_lowercase() == "findandmodify" {
-                        // findAndModify always returns at most 1 row, the same as the num of changed rows
-                        n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
-                        n_docs_changed = n_docs_returned;
-                    } else if client_request.op == "update" {
-                        // Update uses n_modified to indicate number of docs changed
-                        n_docs_changed = Some(section.get_i32("n_modified").unwrap_or(0));
-                    } else if section.contains_key("n") {
-                        // Lump the rest of the update operations together
-                        n_docs_changed = Some(section.get_i32("n").unwrap_or(0));
-                    }
-
-                    if let Some(n) = n_docs_returned {
-                        if let Some(span) = &mut client_request.span {
-                            span.set_tag(|| Tag::new("documents_returned", n as i64));
-                        }
-                        DOCUMENTS_RETURNED_TOTAL
-                            .with_label_values(&self.label_values(&client_request))
-                            .observe(n as f64);
-                    }
-
-                    if let Some(n) = n_docs_changed {
-                        if let Some(span) = &mut client_request.span {
-                            span.set_tag(|| Tag::new("documents_changed", n as i64));
-                        }
-                        DOCUMENTS_CHANGED_TOTAL
-                            .with_label_values(&self.label_values(&client_request))
-                            .observe(f64::from(n.abs()));
-                    }
-
-                    // Handle the span creation for the cursor operations.
-                    if let Some(cursor_id) = section.get_i64("cursor_id") {
-                        if cursor_id == 0 {
-                            // So this is the last batch in this cursor, we need to remove
-                            // the parent trace from the parent trace map to prevent leaks.
-                            // Some exact querys never do a getMore, so ignore these.
-                            if client_request.cursor_id != 0 {
-                                debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
-                                self.cursor_trace_parent.remove(&client_request.cursor_id);
-                            }
-                        } else if client_request.op == "find" || client_request.op == "aggregate" {
-                            // This is a first call of a cursor operation. We take it's trace
-                            // span and associate it with cursor id so that subsequent getMore
-                            // operations can follow spans from it.
-                            //
-                            // Note: Currently MongoDb always follows up a "find" operation with
-                            // "getMore" even if the first find is exhaustive. So we're not leaking
-                            // those references in this way.
-                            //
-                            if client_request.span.is_some() {
-                                debug!("Saving parent trace for cursor {}", cursor_id);
-                                let span = std::mem::replace(&mut client_request.span, None);
-                                self.cursor_trace_parent.insert(cursor_id, span.unwrap());
-                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(self.cursor_trace_parent.capacity() as f64);
-                            }
-                        }
-                    }
-                }
+                self.process_response_documents(&mut client_request, m.get_documents());
             },
             MongoMessage::Reply(r) => {
                 for doc in &r.documents {
                     // The first isMaster response is an OP_REPLY so we need to look at it
                     self.try_parsing_replicaset(&doc);
                 }
-                if let Some(span) = &mut client_request.span {
-                    span.set_tag(|| {
-                        Tag::new("documents_returned", r.number_returned as i64)
-                    });
-                }
-                DOCUMENTS_RETURNED_TOTAL
-                    .with_label_values(&self.label_values(&client_request))
-                    .observe(f64::from(r.number_returned));
+                self.process_response_documents(&mut client_request, r.get_documents());
             },
             other => {
                 warn!("Unrecognized message_type: {:?}", other);
             },
+        }
+    }
+
+    fn process_response_documents(&mut self, client_request: &mut ClientRequest, documents: &Vec<bson_lite::BsonLiteDocument>) {
+        for section in documents {
+            self.try_parsing_replicaset(&section);
+
+            if let Some(ok) = section.get_float("ok") {
+                if ok == 0.0 {
+                    if let Some(span) = &mut client_request.span {
+                        span.set_tag(|| {
+                            Tag::new("error", true)
+                        });
+                    }
+                    SERVER_RESPONSE_ERRORS_TOTAL
+                        .with_label_values(&self.label_values(&client_request))
+                        .inc();
+                }
+            }
+
+            let mut n_docs_returned = None;
+            let mut n_docs_changed = None;
+
+            if let Some(n) = section.get_i32("docs_returned") {
+                // Number of documents returned from a cursor operation (find, getMore, etc)
+                n_docs_returned = Some(n);
+            } else if client_request.op == "count" {
+                // Count also kind of returns documents, record these
+                n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
+            } else if client_request.op.to_ascii_lowercase() == "findandmodify" {
+                // findAndModify always returns at most 1 row, the same as the num of changed rows
+                n_docs_returned = Some(section.get_i32("n").unwrap_or(0));
+                n_docs_changed = n_docs_returned;
+            } else if client_request.op == "update" {
+                // Update uses n_modified to indicate number of docs changed
+                n_docs_changed = Some(section.get_i32("n_modified").unwrap_or(0));
+            } else if section.contains_key("n") {
+                // Lump the rest of the update operations together
+                n_docs_changed = Some(section.get_i32("n").unwrap_or(0));
+            }
+
+            if let Some(n) = n_docs_returned {
+                if let Some(span) = &mut client_request.span {
+                    span.set_tag(|| Tag::new("documents_returned", n as i64));
+                }
+                DOCUMENTS_RETURNED_TOTAL
+                    .with_label_values(&self.label_values(&client_request))
+                    .observe(n as f64);
+            }
+
+            if let Some(n) = n_docs_changed {
+                if let Some(span) = &mut client_request.span {
+                    span.set_tag(|| Tag::new("documents_changed", n as i64));
+                }
+                DOCUMENTS_CHANGED_TOTAL
+                    .with_label_values(&self.label_values(&client_request))
+                    .observe(f64::from(n.abs()));
+            }
+
+            // Handle the span creation for the cursor operations.
+            if let Some(cursor_id) = section.get_i64("cursor_id") {
+                if cursor_id == 0 {
+                    // So this is the last batch in this cursor, we need to remove
+                    // the parent trace from the parent trace map to prevent leaks.
+                    // Some exact querys never do a getMore, so ignore these.
+                    if client_request.cursor_id != 0 {
+                        debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
+                        self.cursor_trace_parent.remove(&client_request.cursor_id);
+                    }
+                } else if client_request.op == "find" || client_request.op == "aggregate" {
+                    // This is a first call of a cursor operation. We take it's trace
+                    // span and associate it with cursor id so that subsequent getMore
+                    // operations can follow spans from it.
+                    //
+                    // Note: Currently MongoDb always follows up a "find" operation with
+                    // "getMore" even if the first find is exhaustive. So we're not leaking
+                    // those references in this way.
+                    //
+                    if client_request.span.is_some() {
+                        debug!("Saving parent trace for cursor {}", cursor_id);
+                        let span = std::mem::replace(&mut client_request.span, None);
+                        self.cursor_trace_parent.insert(cursor_id, span.unwrap());
+                        CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(self.cursor_trace_parent.capacity() as f64);
+                    }
+                }
+            }
         }
     }
 
