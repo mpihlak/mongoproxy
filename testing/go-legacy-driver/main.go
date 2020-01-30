@@ -13,15 +13,30 @@ func main() {
 	}
 
 	log.Println("connected.")
-	c := session.DB("").C("kittens")
+	coll := session.DB("").C("kittens")
 
-	var kittens []bson.M
-	if err := c.Find(nil).All(&kittens); err != nil {
+	log.Println("Querying one")
+	var kittens bson.M
+	if err := coll.Find(nil).One(&kittens); err != nil {
 		log.Fatalf("error querying: %v", err)
 	}
 
-	for _, v := range kittens {
-		log.Printf("%v %v", v["name"], v["number"])
+	log.Printf("%v %v", kittens["name"], kittens["number"])
+
+	log.Println("Inserting")
+	if err := coll.Insert(bson.M{"name": "Fux", "number": 123}); err != nil {
+		log.Fatalf("Insert failed: %v", err)
 	}
 
+	log.Println("Updating")
+	if err := coll.Update(bson.M{"name": "Fux"}, bson.M{"name": "Foxy", "number": 124}); err != nil {
+		log.Fatalf("Update failed: %v", err)
+	}
+
+	log.Println("Deleting")
+	if err := coll.Remove(bson.M{"name": "Foxy"}); err != nil {
+		log.Fatalf("Delete failed: %v", err)
+	}
+
+	log.Println("Done")
 }
