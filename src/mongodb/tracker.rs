@@ -233,7 +233,9 @@ impl ClientRequest {
                 let pos = m.full_collection_name.find('.').unwrap_or_else(|| m.full_collection_name.len());
                 db = m.full_collection_name[..pos].to_owned();
 
-                if let Some(val) = m.query.get_str("op_value") {
+                if let Some(val) = m.query.get_str("collection") {
+                    coll = val.to_owned();
+                } else if let Some(val) = m.query.get_str("op_value") {
                     coll = val.to_owned();
                 }
                 debug!("OP_QUERY Parsed db={} coll={}", db, coll);
