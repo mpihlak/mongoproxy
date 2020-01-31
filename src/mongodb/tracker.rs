@@ -236,9 +236,19 @@ impl ClientRequest {
                 if let Some(val) = m.query.get_str("op_value") {
                     coll = val.to_owned();
                 }
-                debug!("Parsed db={} coll={}", db, coll);
+                debug!("OP_QUERY Parsed db={} coll={}", db, coll);
             },
-
+            MongoMessage::GetMore(m) => {
+                op = String::from("getMore");
+                if let Some(pos) = m.full_collection_name.find('.') {
+                    let (_db, _coll) = m.full_collection_name.split_at(pos);
+                    db = _db.to_owned();
+                    if coll.len() > 0 {
+                        coll = (_coll[1..]).to_owned();
+                    }
+                }
+                debug!("OP_GET_MORE Parsed db={} coll={}", db, coll);
+            },
             // There is no response to OP_INSERT, DELETE, UPDATE so don't bother
             // processing labels for these.
             MongoMessage::Insert(_) |
