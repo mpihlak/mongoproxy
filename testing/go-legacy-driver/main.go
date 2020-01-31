@@ -16,12 +16,12 @@ func main() {
 	coll := session.DB("").C("kittens")
 
 	log.Println("Querying one")
-	var kittens bson.M
-	if err := coll.Find(nil).One(&kittens); err != nil {
+	var kittens []bson.M
+	if err := coll.Find(nil).All(&kittens); err != nil {
 		log.Fatalf("error querying: %v", err)
 	}
 
-	log.Printf("%v %v", kittens["name"], kittens["number"])
+	log.Printf("%v", kittens)
 
 	log.Println("Inserting")
 	if err := coll.Insert(bson.M{"name": "Fux", "number": 123}); err != nil {
@@ -36,6 +36,13 @@ func main() {
 	log.Println("Deleting")
 	if err := coll.Remove(bson.M{"name": "Foxy"}); err != nil {
 		log.Fatalf("Delete failed: %v", err)
+	}
+
+	log.Println("Iterating")
+	iter := coll.Find(nil).Iter()
+	var kitten bson.M
+	for iter.Next(&kitten) {
+		log.Println(kitten)
 	}
 
 	log.Println("Done")
