@@ -230,6 +230,9 @@ impl ClientRequest {
                 // Or a ping, so handle these as well.
                 op = String::from(m.query.get_str("op").unwrap_or("query"));
 
+                // The database name can be obtained from the message itself, however the collection name
+                // is *not* actually in the full_collection_name, but needs to be obtained from the payload
+                // query. There too are multiple options (op_value or collection)
                 let pos = m.full_collection_name.find('.').unwrap_or_else(|| m.full_collection_name.len());
                 db = m.full_collection_name[..pos].to_owned();
 
@@ -245,9 +248,7 @@ impl ClientRequest {
                 if let Some(pos) = m.full_collection_name.find('.') {
                     let (_db, _coll) = m.full_collection_name.split_at(pos);
                     db = _db.to_owned();
-                    if coll.len() > 0 {
-                        coll = (_coll[1..]).to_owned();
-                    }
+                    coll = _coll[1..].to_owned();
                 }
                 debug!("OP_GET_MORE Parsed db={} coll={}", db, coll);
             },
