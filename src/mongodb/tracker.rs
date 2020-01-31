@@ -241,7 +241,6 @@ impl ClientRequest {
                 } else if let Some(val) = m.query.get_str("op_value") {
                     coll = val.to_owned();
                 }
-                debug!("OP_QUERY Parsed db={} coll={}", db, coll);
             },
             MongoMessage::GetMore(m) => {
                 op = String::from("getMore");
@@ -250,7 +249,6 @@ impl ClientRequest {
                     db = _db.to_owned();
                     coll = _coll[1..].to_owned();
                 }
-                debug!("OP_GET_MORE Parsed db={} coll={}", db, coll);
             },
             // There is no response to OP_INSERT, DELETE, UPDATE so don't bother
             // processing labels for these.
