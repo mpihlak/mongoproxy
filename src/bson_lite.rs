@@ -109,40 +109,32 @@ impl BsonLiteDocument {
     }
 
     pub fn get_str(&self, key: &str) -> Option<&str> {
-        if let Some(s) = self.doc.get(key) {
-            if let BsonValue::String(result) = s {
-                return Some(result)
-            }
+        match self.doc.get(key) {
+            Some(BsonValue::String(result)) => Some(result),
+            _ => None,
         }
-        None
     }
 
     #[allow(dead_code)]
     pub fn get_float(&self, key: &str) -> Option<f64> {
-        if let Some(s) = self.doc.get(key) {
-            if let BsonValue::Float(result) = s {
-                return Some(*result)
-            }
+        match self.doc.get(key) {
+            Some(BsonValue::Float(result)) => Some(*result),
+            _ => None,
         }
-        None
     }
 
     pub fn get_i32(&self, key: &str) -> Option<i32> {
-        if let Some(s) = self.doc.get(key) {
-            if let BsonValue::Int32(result) = s {
-                return Some(*result)
-            }
+        match self.doc.get(key) {
+            Some(BsonValue::Int32(result)) => Some(*result),
+            _ => None,
         }
-        None
     }
 
     pub fn get_i64(&self, key: &str) -> Option<i64> {
-        if let Some(s) = self.doc.get(key) {
-            if let BsonValue::Int64(result) = s {
-                return Some(*result)
-            }
+        match self.doc.get(key) {
+            Some(BsonValue::Int64(result)) => Some(*result),
+            _ => None,
         }
-        None
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
