@@ -4,9 +4,9 @@ There are many MongoDb proxies, but this one is about observability. It passes b
 All bytes are passed through unchanged.
 
 ## Current state
-Supports MongoDb 3.6 and greater (`OP_MSG` protocol), and produces throughput and latency metrics both at the network and document level. The legacy `OP_COMMAND` protocol used by some drivers and older Mongo versions is not supported. The proxy won't crash or anything but the collected metrics will be limited to basic network and rps.
+Supports MongoDb 3.6 and greater (`OP_MSG` protocol), and produces throughput and latency metrics both at the network and document level. The legacy `OP_COMMAND` protocol used by some drivers and older Mongo versions is not fully supported. The proxy won't crash or anything but the collected metrics will be limited.
 
-Performance overhead is minimal. In sidecar mode, expect to add 3-5% CPU to the Pod and a sub 1ms increase to the latency (small requests). Memory usage depends on the max request/response size (currently needs to have the whole BSON in memory for parsing) and number of active connections. For most well-behaved apps the memory usage should be around few tens of MBs, however I've seen it go up to 100MB with some workloads.
+Performance overhead is minimal. In sidecar mode, expect to add 3-5% CPU to the Pod and a sub 1ms increase to the latency (proportional to response size). Memory usage depends on the max request/response size (currently needs to have the whole BSON in memory for parsing) and number of active connections. For most well-behaved apps the memory usage should be around few tens of MBs, however I've seen it go up to 100MB with some workloads.
 
 Since it uses a thread per connection, `MALLOC_ARENA_MAX` needs to be tuned to avoid excessive memory usage due to how `malloc()` handles per-thread arenas. 2 is a good starting value.
 
@@ -23,11 +23,11 @@ This mode is used when running the proxy as a sidecar on a K8s pod. `iptables` r
 
 See the [manually added](examples/sidecar) or [automatically injected](examples/k8s-sidecar-injector) sidecar examples.
 
-### Static proxy with pre-determined server address
+### Static server address
 ```
 mongoproxy --proxy 27113:localhost:27017
 ```
-This will proxy all requests on port `27113` to a fixed MongoDb instance running on `localhost:27017`. Useful when running as a shared front-proxy. However this mode does not easily support replica sets, as replicaset connections can be redirected to any host in the set.
+This will proxy all requests on port `27113` to the MongoDb instance running on `localhost:27017`. Useful when running as a shared front-proxy. However this mode does not easily support replica sets, as replicaset connections can be redirected to any host in the set.
 
 See the [front proxy](examples/front-proxy) example.
 
@@ -41,6 +41,8 @@ mongoproxy --proxy 27113:localhost:27017 \
 
 Same as above but with Jaeger tracing enabled. Spans will be sent to collector on `localhost:6831`. The service name for the traces is set to `mongoproxy-ftw`.
 
+Running with `--enable-jaeger` adds some overhead as the full query text is parsed and tagged to the trace. 
+
 ### Other tips
 More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or `debug`. Add `RUST_BACKTRACE=1` for troubleshooting those (rare) crashes.
 
@@ -52,7 +54,7 @@ Per-request histograms:
 * `mongoproxy_documents_changed_total` - How many documents were changed by insert, update or delete.
 * `mongoproxy_server_response_bytes_total` - Response size distribution.
 
-All per-request metrics are labeled with "client" (IP), "app" (appName from connection metadata), "op", "collection" and "db". 
+All per-request metrics are labeled with `client` (IP address), `app` (appName from connection metadata), `op`, `collection`, `db`, `server` and `replicaset`. 
 
 Connection counters
 * `mongoproxy_client_connections_established_total`
@@ -61,7 +63,7 @@ Connection counters
 * `mongoproxy_client_disconnections_total`
 * `mongoproxy_client_connection_errors_total`
 
-Per connection metrics are labeled with "client" (IP).
+Per connection metrics are only labeled with `client`.
 
 Example:
 
