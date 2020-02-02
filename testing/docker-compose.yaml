@@ -2,10 +2,10 @@ version: "3"
 services:
   mongoproxy:
     container_name: mongoproxy
-    image: mongoproxy:latest
+    image: mpihlak/mongoproxy:v0.2.18
     environment:
       - RUST_BACKTRACE=1
-      - RUST_LOG=info
+      - RUST_LOG=debug
     command: ./mongoproxy --proxy 27111:mongodb:27017 --enable-jaeger --jaeger-addr jaeger:6831
     ports:
       - "9898:9898"
