@@ -218,12 +218,6 @@ impl MsgOpMsg {
                 rdr.take(payload_size as u64 - 4).read_to_end(&mut buf)?;
             }
 
-            // Take a copy of the raw section bytes so that we can use the
-            // contained BSON document for trace annotations.
-            if trace_msg_body {
-                section_bytes.push(buf.clone());
-            }
-
             if cfg!(feature = "log_mongodb_messages") {
                 if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
                     info!("OP_MSG BSON: {}", doc);
@@ -234,6 +228,12 @@ impl MsgOpMsg {
 
             match bson_lite::decode_document(&mut &buf[..], &MONGO_BSON_FIELD_SELECTOR) {
                 Ok(doc) => {
+                    // Take a copy of the raw section bytes so that we can use the
+                    // contained BSON document for trace annotations.
+                    if trace_msg_body && doc.contains_key("comment") {
+                        section_bytes.push(buf.clone());
+                    }
+
                     debug!("doc: {}", doc);
                     documents.push(doc);
                 },
