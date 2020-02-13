@@ -23,6 +23,7 @@ lazy_static! {
             .with("comment", "/comment")
             .with("comment", "/q/$comment")
             .with("comment", "/query/$comment")
+            .with("comment", "/filter/$comment")
             // TODO: Handle $comment for "aggregate" command anywhere in the "pipeline"
             .with("comment", "/pipeline/0/$match/$comment")
             .with("app_name", "/client/application/name")
