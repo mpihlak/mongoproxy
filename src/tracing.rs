@@ -8,6 +8,8 @@ use rustracing::{self,sampler::AllSampler,span::SpanContext,carrier::ExtractFrom
 use rustracing_jaeger::{Tracer,reporter::JaegerCompactReporter};
 
 
+pub const TRACE_ID_PREFIX: &str = "uber-trace-id";
+
 // Initialize the tracer and start the thread that writes the spans to Jaeger.
 // The tracer then needs to be cloned and passed to each thread.
 pub fn init_tracer(enable_tracer: bool, service_name: &str, jaeger_addr: SocketAddr) -> Option<Tracer> {
@@ -49,8 +51,6 @@ pub fn init_tracer(enable_tracer: bool, service_name: &str, jaeger_addr: SocketA
 pub fn extract_from_text<T>(span_text: &str) -> rustracing::Result<Option<SpanContext<T>>>
     where T: ExtractFromTextMap<HashMap<String,String>>
 {
-    const TRACE_ID_PREFIX: &str = "uber-trace-id";
-
     // For now expect that the trace is something like "uber-trace-id:1232132132:323232:1"
     // No spaces, quotation marks or other funny stuff.
     //
