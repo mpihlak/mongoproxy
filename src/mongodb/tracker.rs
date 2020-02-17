@@ -12,6 +12,7 @@ use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
 use rustracing::span::Span;
 use rustracing::tag::Tag;
 use rustracing_jaeger::span::{SpanContextState};
+use rustracing::span::SpanContext;
 use rustracing_jaeger::{Tracer};
 
 
@@ -177,13 +178,16 @@ impl ClientRequest {
                     if op == "getMore" {
                         if let Some(cursor) = s.get_i64("op_value") {
                             cursor_id = cursor;
-                            if let Some(parent) = tracker.cursor_trace_parent.get(&cursor_id) {
+                            if let Some(parent_span_id) = tracker.cursor_trace_parent.get(&cursor_id) {
+                                let parent_span_id = parent_span_id.to_owned();
                                 if let Some(tracer) = &tracker.tracer {
-                                    span = Some(tracer
-                                        .span(op.to_owned())
-                                        .follows_from(parent)
-                                        .start());
-                                    debug!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
+                                    if let Ok(Some(parent)) = SpanContext::extract_from_binary(&mut &parent_span_id[..]) {
+                                        span = Some(tracer
+                                            .span(op.to_owned())
+                                            .follows_from(&parent)
+                                            .start());
+                                        debug!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
+                                    }
                                 }
                             }
                         }
@@ -281,7 +285,7 @@ pub struct MongoStatsTracker {
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
-    cursor_trace_parent:    HashMap<i64, Span<SpanContextState>>,
+    cursor_trace_parent:    HashMap<i64, Vec<u8>>,
     replicaset:             String,
     server_host:            String,
     tracer:                 Option<Tracer>,
@@ -470,19 +474,29 @@ impl MongoStatsTracker{
                     }
                 } else if client_request.op == "find" || client_request.op == "aggregate" {
                     // This is a first call of a cursor operation. We take it's trace
-                    // span and associate it with cursor id so that subsequent getMore
-                    // operations can follow spans from it.
+                    // span id and associate it with cursor id so that subsequent getMore
+                    // operations can follow spans from it. Note that we want the actual
+                    // parent span to go out of scope here, so that it gets reported promptly.
                     //
-                    // Note: Currently MongoDb always follows up a "find" operation with
-                    // "getMore" even if the first find is exhaustive. So we're not leaking
-                    // those references in this way.
+                    // Note: For a find() operation without limit, MongoDb will not immediately
+                    // close the cursor even if the find immediately returns all the documents.
+                    // Instead it expects the app to do a "getMore" and this is when we remove
+                    // the entry from the "trace parent" HashMap.
                     //
-                    if client_request.span.is_some() {
+                    // XXX: If the application never does a getMore we will be leaking some.
+                    //
+                    if let Some(span) = &client_request.span {
                         debug!("Saving parent trace for cursor {}", cursor_id);
-                        let span = std::mem::replace(&mut client_request.span, None);
-                        self.cursor_trace_parent.insert(cursor_id, span.unwrap());
-                        CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(self.cursor_trace_parent.capacity() as f64);
+                        if let Some(ctx) = span.context() {
+                            let mut trace_id = Vec::new();
+                            if let Ok(_) = ctx.inject_to_binary(&mut trace_id) {
+                                self.cursor_trace_parent.insert(cursor_id, trace_id);
+                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(self.cursor_trace_parent.capacity() as f64);
+                            }
+                        }
                     }
+                } else {
+                    warn!("operation={}, but cursor_id is set: {}", client_request.op, cursor_id);
                 }
             }
         }
