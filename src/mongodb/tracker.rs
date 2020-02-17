@@ -134,7 +134,7 @@ struct ClientRequest {
 }
 
 impl ClientRequest {
-    fn from(tracker: &MongoStatsTracker, message_length: usize, msg: MongoMessage) -> Self {
+    fn from(tracker: &MongoStatsTracker, message_length: usize, msg: &MongoMessage) -> Self {
         let message_time = Instant::now();
         let mut op = String::from("");
         let mut db = String::from("");
@@ -338,10 +338,30 @@ impl MongoStatsTracker{
                 }
             }
 
+            let req = ClientRequest::from(&self, hdr.message_length, &msg);
+
+            // If we're tracking cursors for tracing purposes then also handle
+            // the cleanup.
+            if let MongoMessage::Msg(msg) = msg {
+                if req.op == "killCursors" && trace_msg_body && msg.section_bytes.len() > 0 {
+                    let bytes = &msg.section_bytes[0];
+                    if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
+                        if let Ok(cursor_ids) = doc.get_array("cursors") {
+                            debug!("Killing cursors: {:?}", cursor_ids);
+                            for cur_id in cursor_ids.iter() {
+                                if let bson::Bson::I64(cur_id) = cur_id {
+                                    self.cursor_trace_parent.remove(&cur_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Keep the client request so that we can keep track to which request
             // a server response belongs to.
-            let req = ClientRequest::from(&self, hdr.message_length, msg);
             self.client_request_map.insert(hdr.request_id, req);
+
             RESPONSE_MATCH_HASHMAP_CAPACITY.set(self.client_request_map.capacity() as f64);
         }
     }

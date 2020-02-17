@@ -230,8 +230,9 @@ impl MsgOpMsg {
             match bson_lite::decode_document(&mut &buf[..], &MONGO_BSON_FIELD_SELECTOR) {
                 Ok(doc) => {
                     // Take a copy of the raw section bytes so that we can use the
-                    // contained BSON document for trace annotations.
-                    if trace_msg_body && doc.contains_key("comment") {
+                    // contained BSON document for trace annotations and killing off cursors.
+                    if trace_msg_body && (doc.contains_key("comment")
+                            || doc.get_str("op").unwrap_or("") == "killCursors") {
                         section_bytes.push(buf.clone());
                     }
 
