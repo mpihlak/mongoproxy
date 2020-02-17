@@ -343,7 +343,7 @@ impl MongoStatsTracker{
             // If we're tracking cursors for tracing purposes then also handle
             // the cleanup.
             if let MongoMessage::Msg(msg) = msg {
-                if req.op == "killCursors" && trace_msg_body && msg.section_bytes.len() > 0 {
+                if req.op == "killCursors" && trace_msg_body && !msg.section_bytes.is_empty() {
                     let bytes = &msg.section_bytes[0];
                     if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
                         if let Ok(cursor_ids) = doc.get_array("cursors") {
@@ -426,7 +426,7 @@ impl MongoStatsTracker{
         }
     }
 
-    fn process_response_documents(&mut self, client_request: &mut ClientRequest, documents: &Vec<bson_lite::BsonLiteDocument>) {
+    fn process_response_documents(&mut self, client_request: &mut ClientRequest, documents: &[bson_lite::BsonLiteDocument]) {
         for section in documents {
             self.try_parsing_replicaset(&section);
 
@@ -509,7 +509,7 @@ impl MongoStatsTracker{
                         debug!("Saving parent trace for cursor {}", cursor_id);
                         if let Some(ctx) = span.context() {
                             let mut trace_id = Vec::new();
-                            if let Ok(_) = ctx.inject_to_binary(&mut trace_id) {
+                            if ctx.inject_to_binary(&mut trace_id).is_ok() {
                                 self.cursor_trace_parent.insert(cursor_id, trace_id);
                                 CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(self.cursor_trace_parent.capacity() as f64);
                             }
