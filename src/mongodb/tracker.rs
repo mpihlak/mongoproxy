@@ -6,6 +6,8 @@ use crate::tracing;
 use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc,Mutex};
+
 use log::{debug,warn};
 use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
 
@@ -121,6 +123,22 @@ lazy_static! {
         "getMore", "aggregate", "distinct"].iter().cloned().collect();
 }
 
+// Map cursors to their parent traces. Keyed by server hostport and cursor id
+//
+// XXX: If the cursor id's are not unique within a MongoDb instance then there's
+// a risk of collision if there are multiple databases on the same server.
+pub struct CursorTraceMapper {
+    trace_mapper: HashMap<(std::net::SocketAddr,i64), Vec<u8>>,
+}
+
+impl CursorTraceMapper {
+    pub fn new() -> Self {
+        CursorTraceMapper {
+            trace_mapper: HashMap::new(),
+        }
+    }
+}
+
 // Stripped down version of the client request. We need this mostly for timing
 // stats and metric labels.
 struct ClientRequest {
@@ -174,11 +192,15 @@ impl ClientRequest {
 
                     // If this is a getMore operation then it will not have a client provided
                     // trace id. Instead we need follow from the span that was created by the
-                    // initial "find" or "aggregate" operation.
+                    // initial "find" or "aggregate" operation. And since cursors can be shared
+                    // across connections we use this mutex protected map for it.
+                    //
                     if op == "getMore" {
                         if let Some(cursor) = s.get_i64("op_value") {
                             cursor_id = cursor;
-                            if let Some(parent_span_id) = tracker.cursor_trace_parent.get(&cursor_id) {
+                            let ctp = tracker.cursor_trace_mapper.lock().unwrap();
+
+                            if let Some(parent_span_id) = ctp.trace_mapper.get(&(tracker.server_addr_sa, cursor_id)) {
                                 if let Some(tracer) = &tracker.tracer {
                                     if let Ok(Some(parent)) = SpanContext::extract_from_binary(&mut &parent_span_id[..]) {
                                         span = Some(tracer
@@ -285,10 +307,11 @@ pub struct MongoStatsTracker {
     client:                 MongoProtocolParser,
     server:                 MongoProtocolParser,
     server_addr:            String,
+    server_addr_sa:         std::net::SocketAddr,
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
-    cursor_trace_parent:    HashMap<i64, Vec<u8>>,
+    cursor_trace_mapper:    Arc<Mutex<CursorTraceMapper>>,
     replicaset:             String,
     server_host:            String,
     tracer:                 Option<Tracer>,
@@ -305,14 +328,19 @@ impl Drop for MongoStatsTracker {
 }
 
 impl MongoStatsTracker{
-    pub fn new(client_addr: &str, server_addr: &str, tracer: Option<Tracer>) -> Self {
+    pub fn new(client_addr: &str,
+               server_addr: &str,
+               server_addr_sa: std::net::SocketAddr,
+               tracer: Option<Tracer>,
+               trace_mapper: Arc<Mutex<CursorTraceMapper>>) -> Self {
         MongoStatsTracker {
             client: MongoProtocolParser::new(),
             server: MongoProtocolParser::new(),
             client_addr: client_addr.to_string(),
             server_addr: server_addr.to_string(),
+            server_addr_sa,
             client_request_map: HashMap::new(),
-            cursor_trace_parent: HashMap::new(),
+            cursor_trace_mapper: trace_mapper,
             client_application: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
@@ -353,7 +381,9 @@ impl MongoStatsTracker{
                             debug!("Killing cursors: {:?}", cursor_ids);
                             for cur_id in cursor_ids.iter() {
                                 if let bson::Bson::I64(cur_id) = cur_id {
-                                    self.cursor_trace_parent.remove(&cur_id);
+                                    let mut ctp = self.cursor_trace_mapper.lock().unwrap();
+                                    ctp.trace_mapper.remove(&(self.server_addr_sa, *cur_id));
+                                    CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
                                 }
                             }
                         }
@@ -493,7 +523,9 @@ impl MongoStatsTracker{
                     // Some exact querys never do a getMore, so ignore these.
                     if client_request.cursor_id != 0 {
                         debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
-                        self.cursor_trace_parent.remove(&client_request.cursor_id);
+                        let mut ctp = self.cursor_trace_mapper.lock().unwrap();
+                        ctp.trace_mapper.remove(&(self.server_addr_sa, client_request.cursor_id));
+                        CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
                     }
                 } else if client_request.op == "find" || client_request.op == "aggregate" {
                     // This is a first call of a cursor operation. We take it's trace
@@ -513,8 +545,9 @@ impl MongoStatsTracker{
                             let mut trace_id = Vec::new();
                             if ctx.inject_to_binary(&mut trace_id).is_ok() {
                                 debug!("Saving parent trace for cursor {}", cursor_id);
-                                self.cursor_trace_parent.insert(cursor_id, trace_id);
-                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(self.cursor_trace_parent.capacity() as f64);
+                                let mut ctp = self.cursor_trace_mapper.lock().unwrap();
+                                ctp.trace_mapper.insert((self.server_addr_sa, cursor_id), trace_id);
+                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
                             }
                         }
                     }

@@ -3,6 +3,7 @@ use std::io::{self, Read, Write};
 use std::error::{Error};
 use std::{thread, time, str};
 use std::time::{Duration,Instant};
+use std::sync::{Arc,Mutex};
 
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
@@ -18,7 +19,7 @@ use lazy_static::lazy_static;
 
 use mongoproxy::tracing;
 use mongoproxy::dstaddr;
-use mongoproxy::mongodb::tracker::{MongoStatsTracker};
+use mongoproxy::mongodb::tracker::{MongoStatsTracker,CursorTraceMapper};
 
 
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
@@ -148,15 +149,17 @@ fn main() {
     info!("Admin endpoint at http://{}", admin_addr);
 
     let tracer = tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr);
+    let cursor_trace_mapper = Arc::new(Mutex::new(CursorTraceMapper::new()));
 
     // Finally, start a listener for each proxy spec on the command line
     let mut proxy_threads = Vec::new();
     for proxy_spec in matches.values_of("proxy").unwrap() {
         let proxy = ProxyDef::from_str(proxy_spec).unwrap();
         let tracer = tracer.clone();
+        let cursor_trace_mapper = cursor_trace_mapper.clone();
 
         proxy_threads.push(thread::spawn(|| {
-            run_proxy(proxy, tracer);
+            run_proxy(proxy, tracer, cursor_trace_mapper);
         }));
     }
 
@@ -165,7 +168,7 @@ fn main() {
     }
 }
 
-fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>) {
+fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>, trace_mapper: Arc<Mutex<CursorTraceMapper>>) {
     let listener = TcpListener::bind(&proxy.local_addr).unwrap();
     if proxy.remote_addr.is_empty() {
         info!("Proxying {} -> <original dst>", proxy.local_addr);
@@ -197,11 +200,13 @@ fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>) {
                 };
 
                 let tracer = tracer.clone();
+                let trace_mapper = trace_mapper.clone();
+
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
                 thread::spawn(move || {
                     info!("new connection from {}", client_addr);
-                    match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap(), tracer) {
+                    match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap(), tracer, trace_mapper) {
                         Ok(_) => {
                             info!("{} closing connection.", client_addr);
                             DISCONNECTION_COUNT_TOTAL
@@ -238,7 +243,8 @@ fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>) {
 // The difficulty there would be reassembling the stream, and we wouldn't
 // easily able to track connections that have already been established.
 //
-fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Option<Tracer>) -> std::io::Result<()> {
+fn handle_connection(server_addr: &str, mut client_stream: TcpStream,
+        tracer: Option<Tracer>, trace_mapper: Arc<Mutex<CursorTraceMapper>>) -> std::io::Result<()> {
     const CLIENT: Token = Token(1);
     const SERVER: Token = Token(2);
 
@@ -272,7 +278,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream, tracer: Op
     let mut done = false;
     let client_addr = format_client_address(&client_stream.peer_addr()?);
     let tracing_enabled = tracer.is_some();
-    let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), tracer);
+    let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), server_addr, tracer, trace_mapper);
     let mut last_time = Instant::now();
 
     let _ = client_stream.set_nodelay(true);
