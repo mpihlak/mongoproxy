@@ -179,7 +179,6 @@ impl ClientRequest {
                         if let Some(cursor) = s.get_i64("op_value") {
                             cursor_id = cursor;
                             if let Some(parent_span_id) = tracker.cursor_trace_parent.get(&cursor_id) {
-                                let parent_span_id = parent_span_id.to_owned();
                                 if let Some(tracer) = &tracker.tracer {
                                     if let Ok(Some(parent)) = SpanContext::extract_from_binary(&mut &parent_span_id[..]) {
                                         span = Some(tracer
@@ -187,8 +186,12 @@ impl ClientRequest {
                                             .follows_from(&parent)
                                             .start());
                                         debug!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
+                                    } else {
+                                        debug!("extract_from_binary failed for cursor_id={} data={:?}", cursor_id, parent_span_id);
                                     }
                                 }
+                            } else {
+                                debug!("Parent span not found for cursor_id={}", cursor_id);
                             }
                         }
                     } else if let Some(comm) = s.get_str("comment") {
@@ -506,10 +509,10 @@ impl MongoStatsTracker{
                     // XXX: If the application never does a getMore we will be leaking some.
                     //
                     if let Some(span) = &client_request.span {
-                        debug!("Saving parent trace for cursor {}", cursor_id);
                         if let Some(ctx) = span.context() {
                             let mut trace_id = Vec::new();
                             if ctx.inject_to_binary(&mut trace_id).is_ok() {
+                                debug!("Saving parent trace for cursor {}", cursor_id);
                                 self.cursor_trace_parent.insert(cursor_id, trace_id);
                                 CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(self.cursor_trace_parent.capacity() as f64);
                             }
