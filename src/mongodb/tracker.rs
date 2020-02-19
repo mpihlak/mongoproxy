@@ -127,6 +127,7 @@ lazy_static! {
 //
 // XXX: If the cursor id's are not unique within a MongoDb instance then there's
 // a risk of collision if there are multiple databases on the same server.
+#[derive(Default)]
 pub struct CursorTraceMapper {
     trace_mapper: HashMap<(std::net::SocketAddr,i64), Vec<u8>>,
 }
