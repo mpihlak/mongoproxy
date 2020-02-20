@@ -552,7 +552,7 @@ impl MongoStatsTracker{
                             }
                         }
                     }
-                } else {
+                } else if client_request.op != "getMore" {
                     warn!("operation={}, but cursor_id is set: {}", client_request.op, cursor_id);
                 }
             }
