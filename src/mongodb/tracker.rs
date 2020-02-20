@@ -191,38 +191,34 @@ impl ClientRequest {
                         db = have_db.to_string();
                     }
 
-                    // If this is a getMore operation then it will not have a client provided
-                    // trace id. Instead we need follow from the span that was created by the
-                    // initial "find" or "aggregate" operation. And since cursors can be shared
-                    // across connections we use this mutex protected map for it.
-                    //
-                    if op == "getMore" {
-                        if let Some(cursor) = s.get_i64("op_value") {
-                            cursor_id = cursor;
-                            let ctp = tracker.cursor_trace_mapper.lock().unwrap();
+                    if let Some(tracer) = &tracker.tracer {
+                        // If this is a getMore operation then it will not have a client provided
+                        // trace id. Instead we need follow from the span that was created by the
+                        // initial "find" or "aggregate" operation.
+                        if op == "getMore" {
+                            if let Some(cursor) = s.get_i64("op_value") {
+                                cursor_id = cursor;
+                                let ctp = tracker.cursor_trace_mapper.lock().unwrap();
 
-                            if let Some(parent_span_id) = ctp.trace_mapper.get(&(tracker.server_addr_sa, cursor_id)) {
-                                if let Some(tracer) = &tracker.tracer {
+                                if let Some(parent_span_id) = ctp.trace_mapper.get(&(tracker.server_addr_sa, cursor_id)) {
                                     if let Ok(Some(parent)) = SpanContext::extract_from_binary(&mut &parent_span_id[..]) {
                                         span = Some(tracer
                                             .span(op.to_owned())
-                                            .follows_from(&parent)
+                                            .child_of(&parent)
                                             .start());
                                         debug!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
                                     } else {
                                         debug!("extract_from_binary failed for cursor_id={} data={:?}", cursor_id, parent_span_id);
                                     }
+                                } else {
+                                    debug!("Parent span not found for cursor_id={}", cursor_id);
                                 }
-                            } else {
-                                debug!("Parent span not found for cursor_id={}", cursor_id);
                             }
-                        }
-                    } else if let Some(comm) = s.get_str("comment") {
-                        debug!("Have a comment field: {}", comm);
-                        match tracing::extract_from_text(comm) {
-                            Ok(Some(parent)) => {
-                                debug!("Extracted trace header: {:?}", parent);
-                                if let Some(tracer) = &tracker.tracer {
+                        } else if let Some(comm) = s.get_str("comment") {
+                            debug!("Have a comment field: {}", comm);
+                            match tracing::extract_from_text(comm) {
+                                Ok(Some(parent)) => {
+                                    debug!("Extracted trace header: {:?}", parent);
                                     let mut new_span = tracer
                                         .span(op.to_owned())
                                         .child_of(&parent)
@@ -246,11 +242,11 @@ impl ClientRequest {
 
                                     debug!("Created a new span for {}: parent={:?}", op, parent);
                                     span = Some(new_span)
-                                }
-                            },
-                            other => {
-                                debug!("No trace id found in the comment: {:?}", other);
-                            },
+                                },
+                                other => {
+                                    debug!("No trace id found in the comment: {:?}", other);
+                                },
+                            }
                         }
                     }
                 }
@@ -374,29 +370,34 @@ impl MongoStatsTracker{
 
             // If we're tracking cursors for tracing purposes then also handle
             // the cleanup.
-            if let MongoMessage::Msg(msg) = msg {
-                if req.op == "killCursors" && trace_msg_body && !msg.section_bytes.is_empty() {
-                    let bytes = &msg.section_bytes[0];
-                    if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
-                        if let Ok(cursor_ids) = doc.get_array("cursors") {
-                            debug!("Killing cursors: {:?}", cursor_ids);
-                            for cur_id in cursor_ids.iter() {
-                                if let bson::Bson::I64(cur_id) = cur_id {
-                                    let mut ctp = self.cursor_trace_mapper.lock().unwrap();
-                                    ctp.trace_mapper.remove(&(self.server_addr_sa, *cur_id));
-                                    CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            self.maybe_kill_cursors(&req.op, &msg);
 
             // Keep the client request so that we can keep track to which request
             // a server response belongs to.
             self.client_request_map.insert(hdr.request_id, req);
 
             RESPONSE_MATCH_HASHMAP_CAPACITY.set(self.client_request_map.capacity() as f64);
+        }
+    }
+
+    // Handle "killCursors" to clean up the trace parent hash map
+    fn maybe_kill_cursors(&mut self, op: &str, msg: &MongoMessage) {
+        if let MongoMessage::Msg(msg) = msg {
+            if op == "killCursors" && self.tracer.is_some() && !msg.section_bytes.is_empty() {
+                let bytes = &msg.section_bytes[0];
+                if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
+                    if let Ok(cursor_ids) = doc.get_array("cursors") {
+                        debug!("Killing cursors: {:?}", cursor_ids);
+                        for cur_id in cursor_ids.iter() {
+                            if let bson::Bson::I64(cur_id) = cur_id {
+                                let mut ctp = self.cursor_trace_mapper.lock().unwrap();
+                                ctp.trace_mapper.remove(&(self.server_addr_sa, *cur_id));
+                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -519,11 +520,14 @@ impl MongoStatsTracker{
             // Handle the span creation for the cursor operations.
             if let Some(cursor_id) = section.get_i64("cursor_id") {
                 if cursor_id == 0 {
-                    // So this is the last batch in this cursor, we need to remove
-                    // the parent trace from the parent trace map to prevent leaks.
-                    // Some exact querys never do a getMore, so ignore these.
-                    if client_request.cursor_id != 0 {
-                        debug!("Removing parent trace for exhausted cursor {}", client_request.cursor_id);
+                    // So this is the last batch in this cursor, we need to remove the parent trace
+                    // from the parent trace map to prevent leaks.
+                    //
+                    // Note: To be on the safe side we're always removing, even though not all
+                    // getMore's actually have a span
+                    if self.tracer.is_some() && client_request.cursor_id != 0 {
+                        debug!("Removing parent trace for exhausted cursor server_addr={}, cursor_id={}",
+                            self.server_addr_sa, client_request.cursor_id);
                         let mut ctp = self.cursor_trace_mapper.lock().unwrap();
                         ctp.trace_mapper.remove(&(self.server_addr_sa, client_request.cursor_id));
                         CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
@@ -545,7 +549,7 @@ impl MongoStatsTracker{
                         if let Some(ctx) = span.context() {
                             let mut trace_id = Vec::new();
                             if ctx.inject_to_binary(&mut trace_id).is_ok() {
-                                debug!("Saving parent trace for cursor {}", cursor_id);
+                                debug!("Saving parent trace for server_addr={} cursor_id={}", self.server_addr_sa, cursor_id);
                                 let mut ctp = self.cursor_trace_mapper.lock().unwrap();
                                 ctp.trace_mapper.insert((self.server_addr_sa, cursor_id), trace_id);
                                 CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
