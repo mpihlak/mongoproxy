@@ -123,22 +123,12 @@ lazy_static! {
         "getMore", "aggregate", "distinct"].iter().cloned().collect();
 }
 
-// Map cursors to their parent traces. Keyed by server hostport and cursor id
+// Map cursors to their parent traces. Keyed by server hostport and cursor id.
 //
 // XXX: If the cursor id's are not unique within a MongoDb instance then there's
 // a risk of collision if there are multiple databases on the same server.
-#[derive(Default)]
-pub struct CursorTraceMapper {
-    trace_mapper: HashMap<(std::net::SocketAddr,i64), Vec<u8>>,
-}
+pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), Vec<u8>>;
 
-impl CursorTraceMapper {
-    pub fn new() -> Self {
-        CursorTraceMapper {
-            trace_mapper: HashMap::new(),
-        }
-    }
-}
 
 // Stripped down version of the client request. We need this mostly for timing
 // stats and metric labels.
@@ -198,9 +188,9 @@ impl ClientRequest {
                         if op == "getMore" {
                             if let Some(cursor) = s.get_i64("op_value") {
                                 cursor_id = cursor;
-                                let ctp = tracker.cursor_trace_mapper.lock().unwrap();
+                                let trace_mapper = tracker.cursor_trace_mapper.lock().unwrap();
 
-                                if let Some(parent_span_id) = ctp.trace_mapper.get(&(tracker.server_addr_sa, cursor_id)) {
+                                if let Some(parent_span_id) = trace_mapper.get(&(tracker.server_addr_sa, cursor_id)) {
                                     if let Ok(Some(parent)) = SpanContext::extract_from_binary(&mut &parent_span_id[..]) {
                                         span = Some(tracer
                                             .span(op.to_owned())
@@ -390,9 +380,10 @@ impl MongoStatsTracker{
                         debug!("Killing cursors: {:?}", cursor_ids);
                         for cur_id in cursor_ids.iter() {
                             if let bson::Bson::I64(cur_id) = cur_id {
-                                let mut ctp = self.cursor_trace_mapper.lock().unwrap();
-                                ctp.trace_mapper.remove(&(self.server_addr_sa, *cur_id));
-                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
+                                let mut trace_mapper = self.cursor_trace_mapper.lock().unwrap();
+
+                                trace_mapper.remove(&(self.server_addr_sa, *cur_id));
+                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
                             }
                         }
                     }
@@ -528,9 +519,10 @@ impl MongoStatsTracker{
                     if self.tracer.is_some() && client_request.cursor_id != 0 {
                         debug!("Removing parent trace for exhausted cursor server_addr={}, cursor_id={}",
                             self.server_addr_sa, client_request.cursor_id);
-                        let mut ctp = self.cursor_trace_mapper.lock().unwrap();
-                        ctp.trace_mapper.remove(&(self.server_addr_sa, client_request.cursor_id));
-                        CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
+                        let mut trace_mapper = self.cursor_trace_mapper.lock().unwrap();
+
+                        trace_mapper.remove(&(self.server_addr_sa, client_request.cursor_id));
+                        CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
                     }
                 } else if client_request.op == "find" || client_request.op == "aggregate" {
                     // This is a first call of a cursor operation. We take it's trace
@@ -550,9 +542,10 @@ impl MongoStatsTracker{
                             let mut trace_id = Vec::new();
                             if ctx.inject_to_binary(&mut trace_id).is_ok() {
                                 debug!("Saving parent trace for server_addr={} cursor_id={}", self.server_addr_sa, cursor_id);
-                                let mut ctp = self.cursor_trace_mapper.lock().unwrap();
-                                ctp.trace_mapper.insert((self.server_addr_sa, cursor_id), trace_id);
-                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(ctp.trace_mapper.capacity() as f64);
+                                let mut trace_mapper = self.cursor_trace_mapper.lock().unwrap();
+
+                                trace_mapper.insert((self.server_addr_sa, cursor_id), trace_id);
+                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
                             }
                         }
                     }
