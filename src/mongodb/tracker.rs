@@ -154,31 +154,34 @@ impl ClientRequest {
         match msg {
             MongoMessage::Msg(m) => {
                 // Go and loop through all the documents in the msg and see if we
-                // find an operation that we know. This should be the first key of
-                // the doc so we only look at first key of each section.
+                // find an operation that we know. There might be multiple documents
+                // in the message but we assume that only one of them contains an actual op.
                 for s in m.documents.iter() {
-                    if let Some(_op) = s.get_str("op") {
-                        if op == "" {
-                            // TODO: There might be multiple sections present. We use the op
-                            // from the first section but not sure if that is always the correct one
-                            op = _op.to_owned();
-                        }
-                        if MONGODB_COLLECTION_OPS.contains(op.as_str()) {
-                            if let Some(collection) = s.get_str("op_value") {
-                                coll = collection.to_owned();
+                    if op == "" {
+                        if let Some(opname) = s.get_str("op") {
+                            op = opname.to_owned();
+                            if MONGODB_COLLECTION_OPS.contains(opname) {
+                                // Some operations have the collection as the value of "op"
+                                if let Some(collection) = s.get_str("op_value") {
+                                    coll = collection.to_owned();
+                                }
+                            } else {
+                                // While others have an explicit "collection" field
+                                if let Some(collection) = s.get_str("collection") {
+                                    coll = collection.to_owned();
+                                }
+
+                                if !IGNORE_MONGODB_OPS.contains(opname) {
+                                    // Track all unrecognized ops that we explicitly don't ignore
+                                    warn!("unsupported op: {}", opname);
+                                    UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&opname]).inc();
+                                }
                             }
-                        } else if !IGNORE_MONGODB_OPS.contains(op.as_str()) {
-                            // Track all unrecognized ops that we explicitly don't ignore
-                            warn!("unsupported op: {}", op);
-                            UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&op.as_str()]).inc();
                         }
-                    }
-                    if let Some(collection) = s.get_str("collection") {
-                        // getMore has collection as an explicit field, support that
-                        coll = collection.to_owned();
-                    }
-                    if let Some(have_db) = s.get_str("db") {
-                        db = have_db.to_string();
+
+                        if let Some(have_db) = s.get_str("db") {
+                            db = have_db.to_string();
+                        }
                     }
 
                     if let Some(tracer) = &tracker.tracer {
