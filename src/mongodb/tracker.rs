@@ -112,15 +112,16 @@ lazy_static! {
             "Total number of bytes sent by the server",
             &["client"]).unwrap();
 
-    static ref IGNORE_MONGODB_OPS: HashSet<&'static str> =
+    static ref OTHER_MONGODB_OPS: HashSet<&'static str> =
         ["isMaster", "ismaster", "ping", "whatsmyuri", "buildInfo", "buildinfo",
         "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus", "killCursors",
         "listDatabases", "listIndexes", "createIndexes", "listCollections", "replSetGetStatus",
-        "endSessions", "dropDatabase", "_id", "q"].iter().cloned().collect();
+        "endSessions", "dropDatabase", "_id", "q", "getMore"].iter().cloned().collect();
 
+    // Operations that have collection name as op value
     static ref MONGODB_COLLECTION_OPS: HashSet<&'static str> =
         ["find", "findAndModify", "findandmodify", "insert", "delete", "update", "count",
-        "getMore", "aggregate", "distinct"].iter().cloned().collect();
+        "aggregate", "distinct"].iter().cloned().collect();
 }
 
 // Map cursors to their parent traces. Keyed by server hostport and cursor id.
@@ -171,7 +172,7 @@ impl ClientRequest {
                                     coll = collection.to_owned();
                                 }
 
-                                if !IGNORE_MONGODB_OPS.contains(opname) {
+                                if !OTHER_MONGODB_OPS.contains(opname) {
                                     // Track all unrecognized ops that we explicitly don't ignore
                                     warn!("unsupported op: {}", opname);
                                     UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&opname]).inc();
