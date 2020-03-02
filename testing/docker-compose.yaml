@@ -2,7 +2,7 @@ version: "3"
 services:
   mongoproxy:
     container_name: mongoproxy
-    image: mpihlak/mongoproxy:v0.2.18
+    image: mpihlak/mongoproxy:v0.2.23
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=debug
