@@ -46,6 +46,7 @@ pub enum OpCode{
     OpMsg = 2013,
     OpPing = 2010,
     OpPong = 2011,
+    OpCompressed = 2012,
 }
 
 #[derive(Debug)]
@@ -57,6 +58,7 @@ pub enum MongoMessage {
     Update(MsgOpUpdate),
     Delete(MsgOpDelete),
     Insert(MsgOpInsert),
+    Compressed(MsgOpCompressed),
     None,
 }
 
@@ -70,6 +72,7 @@ impl fmt::Display for MongoMessage {
             MongoMessage::Update(m) => m.fmt(f),
             MongoMessage::Delete(m) => m.fmt(f),
             MongoMessage::Insert(m) => m.fmt(f),
+            MongoMessage::Compressed(m) => m.fmt(f),
             MongoMessage::None => "(None)".fmt(f),
         }
     }
@@ -471,5 +474,29 @@ impl MsgOpReply {
         }
 
         Ok(MsgOpReply{flags, cursor_id, starting_from, number_returned, documents})
+    }
+}
+
+#[derive(Debug)]
+pub struct MsgOpCompressed {
+    original_op: i32,
+    uncompressed_size: i32,
+    compressor_id: u8,
+}
+
+impl fmt::Display for MsgOpCompressed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OP_COMPRESSED op: {}, uncompressed_size: {}, compressor: {}",
+               self.original_op, self.uncompressed_size, self.compressor_id)
+    }
+}
+
+impl MsgOpCompressed {
+    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
+        let original_op = rdr.read_i32::<LittleEndian>()?;
+        let uncompressed_size = rdr.read_i32::<LittleEndian>()?;
+        let compressor_id = rdr.read_u8()?;
+        // Ignore the compressed message, we are not going to use it
+        Ok(MsgOpCompressed{original_op, uncompressed_size, compressor_id})
     }
 }

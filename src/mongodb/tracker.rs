@@ -277,6 +277,10 @@ impl ClientRequest {
             MongoMessage::Delete(_) => {
                 warn!("Not processing labels for obsolete INSERT, UPDATE or DELETE messages");
             },
+            MongoMessage::Compressed(_) => {
+                // There's not much we can know about the compressed message unless we
+                // uncompress it. Don't make noise about it.
+            }
             other => {
                 warn!("Labels not implemented for {}", other);
             },

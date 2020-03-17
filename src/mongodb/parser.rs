@@ -1,4 +1,5 @@
-use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpGetMore,MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MongoMessage};
+use super::messages::{self,MsgHeader,MsgOpMsg,MsgOpQuery,MsgOpGetMore,
+    MsgOpReply,MsgOpUpdate,MsgOpDelete,MsgOpInsert,MsgOpCompressed,MongoMessage};
 use std::io::{self,BufRead};
 use log::{debug,warn,error};
 use prometheus::{CounterVec,Histogram};
@@ -151,6 +152,7 @@ fn extract_message(op_code: u32, mut rdr: impl BufRead, trace_msg_body: bool) ->
         2001 => MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr)?),
         2006 => MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr)?),
         2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr)?),
+        2012 => MongoMessage::Compressed(MsgOpCompressed::from_reader(&mut rdr)?),
         2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr, trace_msg_body)?),
         2010 | 2011 => {
             // This is an undocumented legacy protocol that some clients (bad Robo3T)
