@@ -27,9 +27,11 @@ See the [manually added](examples/sidecar) or [automatically injected](examples/
 ```
 mongoproxy --proxy 27113:localhost:27017
 ```
-This will proxy all requests on port `27113` to the MongoDb instance running on `localhost:27017`. Useful when running as a shared front-proxy. However this mode does not easily support replica sets, as replicaset connections can be redirected to any host in the set.
+This will proxy all requests on port `27113` to the MongoDb instance running on `localhost:27017`. Useful when running as a shared front-proxy. See the [front proxy](examples/front-proxy) for a basic example.
 
-See the [front proxy](examples/front-proxy) example.
+Note that this mode does not easily support replica sets, as replicaset connections can be redirected to any host in the set. To work around this, the proxy needs to run on each of the replicaset nodes and intercept incoming port 27017 traffic. For example, with iptables:
+
+`iptables -t nat -A PREROUTING -i ${IFACE} -p tcp --dport ${MONGO_PORT} -j REDIRECT --to-port ${PROXY_PORT}`
 
 ### With Jaeger tracing
 ```
