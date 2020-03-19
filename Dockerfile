@@ -17,7 +17,7 @@ RUN rm target/*/mongoproxy
 # Now, build mongoproxy
 COPY src/ ./src/
 COPY benches/ ./benches/
-RUN cargo build --release
+RUN cargo build --release --features=log_mongodb_messages
 
 FROM debian:buster-slim
 
