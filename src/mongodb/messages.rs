@@ -1,6 +1,7 @@
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use std::io::{self, Read, BufRead, Write, Cursor};
 use std::fmt;
+use std::{thread};
 use log::{warn,info,debug};
 use crate::bson_lite::{self,FieldSelector,BsonLiteDocument,read_cstring};
 
@@ -224,9 +225,9 @@ impl MsgOpMsg {
 
             if cfg!(feature = "log_mongodb_messages") {
                 if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
-                    info!("OP_MSG BSON: {}", doc);
+                    info!("{:?} OP_MSG BSON: {}", thread::current().id(), doc);
                 } else {
-                    warn!("OP_MSG BSON parsing failed");
+                    warn!("{:?} OP_MSG BSON parsing failed", thread::current().id());
                 }
             }
 
@@ -308,9 +309,9 @@ impl MsgOpQuery {
 
         if cfg!(feature = "log_mongodb_messages") {
             if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
-                info!("OP_QUERY BSON: {}", doc);
+                info!("{:?} OP_QUERY BSON: {}", thread::current().id(), doc);
             } else {
-                warn!("OP_QUERY BSON parsing failed");
+                warn!("{:?} OP_QUERY BSON parsing failed", thread::current().id());
             }
         }
 
@@ -469,7 +470,7 @@ impl MsgOpReply {
         if cfg!(feature = "log_mongodb_messages") {
             let mut c = Cursor::new(&buf);
             while let Ok(doc) = bson::decode_document(&mut c) {
-                info!("OP_REPLY BSON: {}", doc);
+                info!("{:?} OP_REPLY BSON: {}", thread::current().id(), doc);
             }
         }
 
