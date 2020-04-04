@@ -205,16 +205,16 @@ fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>, trace_mapper: Arc<Mutex<Cu
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
                 thread::spawn(move || {
-                    info!("new connection from {}", client_addr);
+                    info!("{:?} new connection from {}", thread::current().id(), client_addr);
                     match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap(), tracer, trace_mapper) {
                         Ok(_) => {
-                            info!("{} closing connection.", client_addr);
+                            info!("{:?} {} closing connection.", thread::current().id(), client_addr);
                             DISCONNECTION_COUNT_TOTAL
                                 .with_label_values(&[&client_addr.to_string()])
                                 .inc();
                         },
                         Err(e) => {
-                            warn!("{} connection error: {}", client_addr, e);
+                            warn!("{:?} {} connection error: {}", thread::current().id(), client_addr, e);
                             CONNECTION_ERRORS_TOTAL
                                 .with_label_values(&[&client_addr.to_string()])
                                 .inc();
@@ -251,13 +251,13 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream,
     let poll = Poll::new().unwrap();
     let mut events = Events::with_capacity(16);
 
-    info!("connecting to server: {}", server_addr);
+    info!("{:?} connecting to server: {}", thread::current().id(), server_addr);
     let timer = SERVER_CONNECT_TIME_SECONDS.with_label_values(&[server_addr]).start_timer();
     let server_addr = lookup_address(server_addr)?;
     let mut server_stream = TcpStream::connect(&server_addr)?;
     poll.register(&server_stream, SERVER, Ready::all(), PollOpt::edge()).unwrap();
 
-    debug!("Waiting server connection to become ready.");
+    debug!("{:?} Waiting server connection to become ready.", thread::current().id());
     'outer: loop {
         // TODO: This poll could also hang forever in case the server is not responding.
         // Consider timing out.
@@ -299,7 +299,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream,
                     timer.observe_duration();
 
                     if !copy_stream_with_fn(&mut client_stream, &mut server_stream, &mut track_client)? {
-                        info!("{} client EOF", client_stream.peer_addr()?);
+                        info!("{:?} {} client EOF", thread::current().id(), client_stream.peer_addr()?);
                         done = true;
                     }
                 },
@@ -312,7 +312,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream,
                     timer.observe_duration();
 
                     if !copy_stream_with_fn(&mut server_stream, &mut client_stream, &mut track_server)? {
-                        info!("{} server EOF", server_stream.peer_addr()?);
+                        info!("{:?} {} server EOF", thread::current().id(), server_stream.peer_addr()?);
                         done = true;
                     }
                 },
@@ -390,7 +390,7 @@ fn write_to_stream(stream: &mut TcpStream, mut buf: &[u8]) -> std::io::Result<()
 
 fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
     if let Some(sockaddr) = addr.to_socket_addrs()?.next() {
-        debug!("{} resolves to {}", addr, sockaddr);
+        debug!("{:?} {} resolves to {}", thread::current().id(), addr, sockaddr);
         return Ok(sockaddr);
     }
     Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "no usable address found"))
