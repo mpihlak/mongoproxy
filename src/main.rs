@@ -110,7 +110,6 @@ fn main() {
             .long("proxy")
             .value_name("local-port[:remote-host:remote-port]")
             .help("Port the proxy listens on (sidecar) and optionally\na target hostport (for static proxy)")
-            .multiple(true)
             .takes_value(true)
             .required(true))
         .arg(Arg::with_name("enable_jaeger")
@@ -145,27 +144,20 @@ fn main() {
 
     env_logger::init();
 
+    info!("MongoProxy v{}", crate_version!());
+
     start_admin_listener(&admin_addr);
     info!("Admin endpoint at http://{}", admin_addr);
 
     let tracer = tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr);
     let cursor_trace_mapper = Arc::new(Mutex::new(CursorTraceMapper::new()));
 
-    // Finally, start a listener for each proxy spec on the command line
-    let mut proxy_threads = Vec::new();
-    for proxy_spec in matches.values_of("proxy").unwrap() {
-        let proxy = ProxyDef::from_str(proxy_spec).unwrap();
-        let tracer = tracer.clone();
-        let cursor_trace_mapper = cursor_trace_mapper.clone();
+    let proxy_spec = matches.value_of("proxy").unwrap();
+    let proxy = ProxyDef::from_str(proxy_spec).unwrap();
+    let tracer = tracer.clone();
+    let cursor_trace_mapper = cursor_trace_mapper.clone();
 
-        proxy_threads.push(thread::spawn(|| {
-            run_proxy(proxy, tracer, cursor_trace_mapper);
-        }));
-    }
-
-    for t in proxy_threads {
-        let _ = t.join();
-    }
+    run_proxy(proxy, tracer, cursor_trace_mapper);
 }
 
 fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>, trace_mapper: Arc<Mutex<CursorTraceMapper>>) {
