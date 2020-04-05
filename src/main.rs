@@ -3,13 +3,11 @@ use std::io::{self, Read, Write};
 use std::error::{Error};
 use std::{thread, time, str};
 use std::time::{Duration,Instant};
-use std::sync::{Arc,Mutex};
 
 use mio::{self, Token, Poll, PollOpt, Events, Ready};
 use mio::net::{TcpStream};
 use prometheus::{CounterVec,Histogram,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
-use rustracing_jaeger::{Tracer};
 use log::{info,warn,error,debug};
 use env_logger;
 use lazy_static::lazy_static;
@@ -19,7 +17,8 @@ use lazy_static::lazy_static;
 
 use mongoproxy::tracing;
 use mongoproxy::dstaddr;
-use mongoproxy::mongodb::tracker::{MongoStatsTracker,CursorTraceMapper};
+use mongoproxy::appconfig::{AppConfig};
+use mongoproxy::mongodb::tracker::{MongoStatsTracker};
 
 
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
@@ -77,31 +76,6 @@ lazy_static! {
 
 }
 
-struct ProxyDef {
-    local_addr: String,
-    remote_addr: String,
-}
-
-impl ProxyDef {
-    /// Parse a proxy definition from a string of <local_port>[:remote-host:remote-port]
-    fn from_str(proxy_def: &str) -> Result<Self, Box<dyn Error>> {
-        if let Some(pos) = proxy_def.find(':') {
-            let (local_port, remote_hostport) = proxy_def.split_at(pos);
-            let local_addr = format!("0.0.0.0:{}", local_port);
-
-            Ok(ProxyDef{
-                local_addr,
-                remote_addr: remote_hostport[1..].to_string()
-            })
-        } else {
-            Ok(ProxyDef{
-                local_addr: format!("0.0.0.0:{}", proxy_def),
-                remote_addr: String::from("")
-            })
-        }
-    }
-}
-
 fn main() {
     let matches = App::new("mongoproxy")
         .version(crate_version!())
@@ -112,6 +86,11 @@ fn main() {
             .help("Port the proxy listens on (sidecar) and optionally\na target hostport (for static proxy)")
             .takes_value(true)
             .required(true))
+        .arg(Arg::with_name("log_mongo_messages")
+            .long("log-mongo-messages")
+            .help("Log the contents of MongoDb messages (adds full BSON parsing)")
+            .takes_value(false)
+            .required(false))
         .arg(Arg::with_name("enable_jaeger")
             .long("enable-jaeger")
             .help("Enable distributed tracing with Jaeger")
@@ -149,23 +128,23 @@ fn main() {
     start_admin_listener(&admin_addr);
     info!("Admin endpoint at http://{}", admin_addr);
 
-    let tracer = tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr);
-    let cursor_trace_mapper = Arc::new(Mutex::new(CursorTraceMapper::new()));
-
     let proxy_spec = matches.value_of("proxy").unwrap();
-    let proxy = ProxyDef::from_str(proxy_spec).unwrap();
-    let tracer = tracer.clone();
-    let cursor_trace_mapper = cursor_trace_mapper.clone();
+    let (local_hostport, remote_hostport) = parse_proxy_addresses(proxy_spec).unwrap();
 
-    run_proxy(proxy, tracer, cursor_trace_mapper);
+    let app = AppConfig::new(
+        tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr),
+        matches.occurrences_of("log_mongo_messages") > 0,
+    );
+
+    run_proxy(local_hostport, remote_hostport, &app);
 }
 
-fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>, trace_mapper: Arc<Mutex<CursorTraceMapper>>) {
-    let listener = TcpListener::bind(&proxy.local_addr).unwrap();
-    if proxy.remote_addr.is_empty() {
-        info!("Proxying {} -> <original dst>", proxy.local_addr);
+fn run_proxy(local_addr: String, remote_addr: String, app: &AppConfig) {
+    let listener = TcpListener::bind(&local_addr).unwrap();
+    if remote_addr.is_empty() {
+        info!("Proxying {} -> <original dst>", local_addr);
     } else {
-        info!("Proxying {} -> {}", proxy.local_addr, proxy.remote_addr);
+        info!("Proxying {} -> {}", local_addr, remote_addr);
     }
 
     for stream in listener.incoming() {
@@ -173,7 +152,7 @@ fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>, trace_mapper: Arc<Mutex<Cu
             Ok(stream) => {
                 let client_addr = format_client_address(&stream.peer_addr().unwrap());
 
-                let server_addr = if proxy.remote_addr.is_empty() {
+                let server_addr = if remote_addr.is_empty() {
                     if let Some(sockaddr) = dstaddr::orig_dst_addr(&stream) {
                         // This only assumes that NATd connections are received
                         // and thus always have a valid target address. We expect
@@ -188,17 +167,16 @@ fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>, trace_mapper: Arc<Mutex<Cu
                         continue;
                     }
                 } else {
-                    proxy.remote_addr.clone()
+                    remote_addr.clone()
                 };
 
-                let tracer = tracer.clone();
-                let trace_mapper = trace_mapper.clone();
+                let app = app.clone();
 
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
                 thread::spawn(move || {
                     info!("{:?} new connection from {}", thread::current().id(), client_addr);
-                    match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap(), tracer, trace_mapper) {
+                    match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap(), app) {
                         Ok(_) => {
                             info!("{:?} {} closing connection.", thread::current().id(), client_addr);
                             DISCONNECTION_COUNT_TOTAL
@@ -225,18 +203,7 @@ fn run_proxy(proxy: ProxyDef, tracer: Option<Tracer>, trace_mapper: Arc<Mutex<Cu
 // between the client and the server. Also split the traffic to MongoDb protocol
 // parser, so that we can get some stats out of this.
 //
-// In addition to the message payloads we should also be keeping track
-// of MongoDb headers. That'd enable us to match responses to requests
-// and calculate latency stats.
-// Unclear if we need to keep multiple headers or is it enough just to
-// keep the latest header that we received from the client.
-//
-// TODO: Consider using a pcap based solution instead of proxying the bytes.
-// The difficulty there would be reassembling the stream, and we wouldn't
-// easily able to track connections that have already been established.
-//
-fn handle_connection(server_addr: &str, mut client_stream: TcpStream,
-        tracer: Option<Tracer>, trace_mapper: Arc<Mutex<CursorTraceMapper>>) -> std::io::Result<()> {
+fn handle_connection(server_addr: &str, mut client_stream: TcpStream, app: AppConfig) -> std::io::Result<()> {
     const CLIENT: Token = Token(1);
     const SERVER: Token = Token(2);
 
@@ -269,8 +236,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream,
 
     let mut done = false;
     let client_addr = format_client_address(&client_stream.peer_addr()?);
-    let tracing_enabled = tracer.is_some();
-    let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), server_addr, tracer, trace_mapper);
+    let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), server_addr, app);
     let mut last_time = Instant::now();
 
     let _ = client_stream.set_nodelay(true);
@@ -286,7 +252,7 @@ fn handle_connection(server_addr: &str, mut client_stream: TcpStream,
                     let timer = CLIENT_TRACKING_TIME_SECONDS.start_timer();
                     connection_was_idle = false;
                     let mut track_client = |buf: &[u8]| {
-                        tracker.track_client_request(buf, tracing_enabled);
+                        tracker.track_client_request(buf);
                     };
                     timer.observe_duration();
 
@@ -361,7 +327,7 @@ fn copy_stream_with_fn(from_stream: &mut TcpStream, mut to_stream: &mut TcpStrea
 }
 
 // Write the buffer to the stream, waiting out the EAGAIN errors
-// TODO: remove this hack
+// TODO: proper handling for EWOULDBLOCK
 fn write_to_stream(stream: &mut TcpStream, mut buf: &[u8]) -> std::io::Result<()> {
     while !buf.is_empty() {
         match stream.write(buf) {
@@ -395,6 +361,18 @@ fn format_client_address(sockaddr: &SocketAddr) -> String {
         addr_str.split_off(pos);
     }
     addr_str
+}
+
+// Parse the local and remote address pair from provided proxy definition
+fn parse_proxy_addresses(proxy_def: &str) -> Result<(String,String), Box<dyn Error>> {
+    if let Some(pos) = proxy_def.find(':') {
+        let (local_port, remote_hostport) = proxy_def.split_at(pos);
+        let local_addr = format!("0.0.0.0:{}", local_port);
+
+        Ok((local_addr, remote_hostport[1..].to_string()))
+    } else {
+        Ok((format!("0.0.0.0:{}", proxy_def), String::from("")))
+    }
 }
 
 pub fn start_admin_listener(endpoint: &str) {

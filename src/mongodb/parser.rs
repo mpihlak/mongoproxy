@@ -74,7 +74,7 @@ impl MongoProtocolParser {
     // bytes and parse the message. Once the message is parsed we expect a header again and the
     // process repeats.
     //
-    pub fn parse_buffer(&mut self, buf: &[u8], trace_msg_body: bool) -> Vec<(MsgHeader, MongoMessage)> {
+    pub fn parse_buffer(&mut self, buf: &[u8], trace_msg_body: bool, log_mongo_messages: bool) -> Vec<(MsgHeader, MongoMessage)> {
         if !self.parser_active {
             return vec![];
         }
@@ -108,7 +108,7 @@ impl MongoProtocolParser {
                     },
                 }
             } else {
-                match extract_message(self.header.op_code, &work_buf[..self.want_bytes], trace_msg_body) {
+                match extract_message(self.header.op_code, &work_buf[..self.want_bytes], trace_msg_body, log_mongo_messages) {
                     Ok(res) => {
                         result.push((self.header.clone(), res));
                     },
@@ -142,18 +142,23 @@ impl MongoProtocolParser {
     }
 }
 
-fn extract_message(op_code: u32, mut rdr: impl BufRead, trace_msg_body: bool) -> io::Result<MongoMessage> {
+fn extract_message(
+    op_code: u32,
+    mut rdr: impl BufRead,
+    trace_msg_body: bool,
+    log_mongo_messages: bool,
+) -> io::Result<MongoMessage> {
     OPCODE_COUNTER.with_label_values(&[&op_code.to_string()]).inc();
 
     let msg = match op_code {
-           1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr)?),
-        2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr)?),
+           1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr, log_mongo_messages)?),
+        2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr, log_mongo_messages)?),
         2005 => MongoMessage::GetMore(MsgOpGetMore::from_reader(&mut rdr)?),
         2001 => MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr)?),
         2006 => MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr)?),
         2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr)?),
         2012 => MongoMessage::Compressed(MsgOpCompressed::from_reader(&mut rdr)?),
-        2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr, trace_msg_body)?),
+        2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr, trace_msg_body, log_mongo_messages)?),
         2010 | 2011 => {
             // This is an undocumented legacy protocol that some clients (bad Robo3T)
             // still use. We ignore it.
@@ -209,7 +214,7 @@ mod tests {
         hdr.write(&mut buf[..]).unwrap();
 
         let mut parser = MongoProtocolParser::new();
-        let result = parser.parse_buffer(&buf.to_vec(), false);
+        let result = parser.parse_buffer(&buf.to_vec(), false, false);
 
         assert_eq!(result.len(), 0);
         assert_eq!(parser.have_header, true);
@@ -228,7 +233,7 @@ mod tests {
         buf.extend(msg_buf);
 
         let mut parser = MongoProtocolParser::new();
-        let result  = parser.parse_buffer(&buf, false);
+        let result  = parser.parse_buffer(&buf, false, false);
         assert_eq!(result.len(), 1);
 
         match result.iter().next().unwrap() {
@@ -260,7 +265,7 @@ mod tests {
         // Write the header of the first message and try parse. This must parse
         // the header but return nothing because it doesn't have a message body yet.
         hdr.write(&mut buf).unwrap();
-        let result = parser.parse_buffer(&buf, false);
+        let result = parser.parse_buffer(&buf, false, false);
         if result.len() == 0 {
             assert_eq!(parser.have_header, true);
             assert_eq!(parser.header.request_id, 1234);
@@ -282,7 +287,7 @@ mod tests {
 
         // Now the parser must return the parsed first message. It also should have
         // started to parse the bytes for the header of the second message.
-        match parser.parse_buffer(&buf, false).iter().next().unwrap() {
+        match parser.parse_buffer(&buf, false, false).iter().next().unwrap() {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
@@ -293,7 +298,7 @@ mod tests {
 
         // Now, the next call with empty buffer must parse the second message header
         // but not return the message itself.
-        match parser.parse_buffer(&[], false).is_empty() {
+        match parser.parse_buffer(&[], false, false).is_empty() {
             true => {
                 assert_eq!(parser.have_header, true);
                 assert_eq!(parser.header.request_id, 5678);
@@ -305,7 +310,7 @@ mod tests {
         // Finally write the seconds message body and expect to parse the full message.
         // Also check that the header matches the second message.
         buf = second_msg_buf.to_vec();
-        match parser.parse_buffer(&buf, false).iter().next().unwrap() {
+        match parser.parse_buffer(&buf, false, false).iter().next().unwrap() {
             (h, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(h.request_id, 5678);
@@ -341,7 +346,7 @@ mod tests {
         buf.extend(&msg_buf);
 
         // Parse and validate the messages
-        let result = parser.parse_buffer(&buf, false);
+        let result = parser.parse_buffer(&buf, false, false);
         assert_eq!(result.len(), 2);
 
         let mut it = result.iter();

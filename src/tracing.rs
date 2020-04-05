@@ -5,7 +5,8 @@ use std::net::{SocketAddr};
 use log::{warn,info,debug};
 
 use rustracing::{self,sampler::AllSampler,span::SpanContext,carrier::ExtractFromTextMap};
-use rustracing_jaeger::{Tracer,reporter::JaegerCompactReporter};
+use rustracing_jaeger::{reporter::JaegerCompactReporter};
+pub use rustracing_jaeger::{Tracer};
 
 
 pub const TRACE_ID_PREFIX: &str = "uber-trace-id";

@@ -2,11 +2,11 @@ use super::messages::{MsgHeader,MongoMessage,ResponseDocuments};
 use super::parser::MongoProtocolParser;
 use crate::bson_lite;
 use crate::tracing;
+use crate::appconfig::{AppConfig};
 
 use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc,Mutex};
 
 use log::{debug,warn};
 use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
@@ -15,7 +15,6 @@ use rustracing::span::Span;
 use rustracing::tag::Tag;
 use rustracing_jaeger::span::{SpanContextState};
 use rustracing::span::SpanContext;
-use rustracing_jaeger::{Tracer};
 
 
 // Common labels for all op metrics
@@ -185,14 +184,14 @@ impl ClientRequest {
                         }
                     }
 
-                    if let Some(tracer) = &tracker.tracer {
+                    if let Some(tracer) = &tracker.app.tracer {
                         // If this is a getMore operation then it will not have a client provided
                         // trace id. Instead we need follow from the span that was created by the
                         // initial "find" or "aggregate" operation.
                         if op == "getMore" {
                             if let Some(cursor) = s.get_i64("op_value") {
                                 cursor_id = cursor;
-                                let trace_mapper = tracker.cursor_trace_mapper.lock().unwrap();
+                                let trace_mapper = tracker.app.trace_mapper.lock().unwrap();
 
                                 if let Some(parent_span_id) = trace_mapper.get(&(tracker.server_addr_sa, cursor_id)) {
                                     if let Ok(Some(parent)) = SpanContext::extract_from_binary(&mut &parent_span_id[..]) {
@@ -306,10 +305,9 @@ pub struct MongoStatsTracker {
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
-    cursor_trace_mapper:    Arc<Mutex<CursorTraceMapper>>,
     replicaset:             String,
     server_host:            String,
-    tracer:                 Option<Tracer>,
+    app:                    AppConfig,
 }
 
 impl Drop for MongoStatsTracker {
@@ -326,8 +324,7 @@ impl MongoStatsTracker{
     pub fn new(client_addr: &str,
                server_addr: &str,
                server_addr_sa: std::net::SocketAddr,
-               tracer: Option<Tracer>,
-               trace_mapper: Arc<Mutex<CursorTraceMapper>>) -> Self {
+               app: AppConfig) -> Self {
         MongoStatsTracker {
             client: MongoProtocolParser::new(),
             server: MongoProtocolParser::new(),
@@ -335,19 +332,22 @@ impl MongoStatsTracker{
             server_addr: server_addr.to_string(),
             server_addr_sa,
             client_request_map: HashMap::new(),
-            cursor_trace_mapper: trace_mapper,
             client_application: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
-            tracer,
+            app,
         }
     }
 
-    pub fn track_client_request(&mut self, buf: &[u8], trace_msg_body: bool) {
+    fn is_tracing_enabled(&self) -> bool {
+        self.app.tracer.is_some()
+    }
+
+    pub fn track_client_request(&mut self, buf: &[u8]) {
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for (hdr, msg) in self.client.parse_buffer(buf, trace_msg_body) {
+        for (hdr, msg) in self.client.parse_buffer(buf, self.is_tracing_enabled(), self.app.log_mongo_messages) {
             debug!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
             // Ignore useless messages
@@ -381,14 +381,14 @@ impl MongoStatsTracker{
     // Handle "killCursors" to clean up the trace parent hash map
     fn maybe_kill_cursors(&mut self, op: &str, msg: &MongoMessage) {
         if let MongoMessage::Msg(msg) = msg {
-            if op == "killCursors" && self.tracer.is_some() && !msg.section_bytes.is_empty() {
+            if op == "killCursors" && self.is_tracing_enabled() && !msg.section_bytes.is_empty() {
                 let bytes = &msg.section_bytes[0];
                 if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
                     if let Ok(cursor_ids) = doc.get_array("cursors") {
                         debug!("Killing cursors: {:?}", cursor_ids);
                         for cur_id in cursor_ids.iter() {
                             if let bson::Bson::I64(cur_id) = cur_id {
-                                let mut trace_mapper = self.cursor_trace_mapper.lock().unwrap();
+                                let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
                                 trace_mapper.remove(&(self.server_addr_sa, *cur_id));
                                 CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
@@ -408,7 +408,7 @@ impl MongoStatsTracker{
         CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr])
             .inc_by(buf.len() as f64);
 
-        for (hdr, msg) in self.server.parse_buffer(buf, false) {
+        for (hdr, msg) in self.server.parse_buffer(buf, false, self.app.log_mongo_messages) {
             debug!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
             // Ignore useless messages
@@ -524,10 +524,10 @@ impl MongoStatsTracker{
                     //
                     // Note: To be on the safe side we're always removing, even though not all
                     // getMore's actually have a span
-                    if self.tracer.is_some() && client_request.cursor_id != 0 {
+                    if self.is_tracing_enabled() && client_request.cursor_id != 0 {
                         debug!("Removing parent trace for exhausted cursor server_addr={}, cursor_id={}",
                             self.server_addr_sa, client_request.cursor_id);
-                        let mut trace_mapper = self.cursor_trace_mapper.lock().unwrap();
+                        let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
                         trace_mapper.remove(&(self.server_addr_sa, client_request.cursor_id));
                         CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
@@ -550,7 +550,7 @@ impl MongoStatsTracker{
                             let mut trace_id = Vec::new();
                             if ctx.inject_to_binary(&mut trace_id).is_ok() {
                                 debug!("Saving parent trace for server_addr={} cursor_id={}", self.server_addr_sa, cursor_id);
-                                let mut trace_mapper = self.cursor_trace_mapper.lock().unwrap();
+                                let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
                                 trace_mapper.insert((self.server_addr_sa, cursor_id), trace_id);
                                 CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);

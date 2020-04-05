@@ -175,7 +175,11 @@ impl ResponseDocuments for MsgOpMsg {
 }
 
 impl MsgOpMsg {
-    pub fn from_reader<R: Read+BufRead>(mut rdr: &mut R, trace_msg_body: bool) -> io::Result<Self> {
+    pub fn from_reader<R: Read+BufRead>(
+        mut rdr: &mut R,
+        trace_msg_body: bool,
+        log_mongo_messages: bool,
+    ) -> io::Result<Self> {
         let flag_bits = rdr.read_u32::<LittleEndian>()?;
         debug!("flag_bits={:04x}", flag_bits);
 
@@ -223,7 +227,7 @@ impl MsgOpMsg {
                 rdr.take(payload_size as u64 - 4).read_to_end(&mut buf)?;
             }
 
-            if cfg!(feature = "log_mongodb_messages") {
+            if log_mongo_messages {
                 if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
                     info!("{:?} OP_MSG BSON: {}", thread::current().id(), doc);
                 } else {
@@ -294,7 +298,7 @@ impl fmt::Display for MsgOpQuery {
 }
 
 impl MsgOpQuery {
-    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead, log_mongo_messages: bool) -> io::Result<Self> {
         let flags  = rdr.read_u32::<LittleEndian>()?;
         let full_collection_name = read_cstring(&mut rdr)?;
         let number_to_skip = rdr.read_i32::<LittleEndian>()?;
@@ -307,7 +311,7 @@ impl MsgOpQuery {
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
 
-        if cfg!(feature = "log_mongodb_messages") {
+        if log_mongo_messages {
             if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
                 info!("{:?} OP_QUERY BSON: {}", thread::current().id(), doc);
             } else {
@@ -452,7 +456,7 @@ impl ResponseDocuments for MsgOpReply {
 }
 
 impl MsgOpReply {
-    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
+    pub fn from_reader(mut rdr: impl BufRead, log_mongo_messages: bool) -> io::Result<Self> {
         let flags  = rdr.read_u32::<LittleEndian>()?;
         let cursor_id = rdr.read_u64::<LittleEndian>()?;
         let starting_from = rdr.read_u32::<LittleEndian>()?;
@@ -467,7 +471,7 @@ impl MsgOpReply {
             documents.push(doc);
         }
 
-        if cfg!(feature = "log_mongodb_messages") {
+        if log_mongo_messages {
             let mut c = Cursor::new(&buf);
             while let Ok(doc) = bson::decode_document(&mut c) {
                 info!("{:?} OP_REPLY BSON: {}", thread::current().id(), doc);
