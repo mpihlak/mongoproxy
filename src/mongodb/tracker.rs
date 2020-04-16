@@ -63,21 +63,21 @@ lazy_static! {
             "mongoproxy_response_latency_seconds",
             "Backend response latency to first byte",
             OP_LABELS,
-            vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 60.0]).unwrap();
+            vec![0.001, 0.01, 0.1, 1.0, 10.0 ]).unwrap();
 
     static ref DOCUMENTS_RETURNED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_returned_total",
             "Number of documents returned in the response",
             OP_LABELS,
-            vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100_000.0 ]).unwrap();
+            vec![1.0, 10.0, 100.0, 1000.0, 10000.0 ]).unwrap();
 
     static ref DOCUMENTS_CHANGED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_changed_total",
             "Number of documents matched by insert, update or delete operations",
             OP_LABELS,
-            vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100_000.0 ]).unwrap();
+            vec![1.0, 10.0, 100.0, 1000.0, 10000.0 ]).unwrap();
 
     static ref SERVER_RESPONSE_SIZE_TOTAL: HistogramVec =
         register_histogram_vec!(
