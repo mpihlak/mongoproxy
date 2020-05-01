@@ -1,17 +1,21 @@
-use std::net::{SocketAddr,TcpStream};
+use std::net::{SocketAddr};
+use std::os::unix::io::AsRawFd;
 
 // Kudos to the folks at Linkerd for this.
 #[cfg(target_os = "linux")]
-pub fn orig_dst_addr(sock: &TcpStream) -> Option<SocketAddr> {
-	use std::os::unix::io::AsRawFd;
-
+pub fn orig_dst_addr<R>(sock: &R) -> Option<SocketAddr>
+    where R: AsRawFd
+{
 	let fd = sock.as_raw_fd();
 	let r = unsafe { linux::so_original_dst(fd) };
 	r.ok()
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn orig_dst_addr(_sock: &TcpStream) -> Option<SocketAddr> {
+//pub fn orig_dst_addr(_sock: impl AsRawFd) -> Option<SocketAddr> {
+pub fn orig_dst_addr<R>(_sock: &R) -> Option<SocketAddr>
+    where R: AsRawFd
+{
 	None
 }
 
