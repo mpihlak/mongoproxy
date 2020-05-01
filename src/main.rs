@@ -1,15 +1,15 @@
-use std::net::{TcpListener,SocketAddr,ToSocketAddrs};
-use std::io::{self, Read, Write};
+use std::sync::{Arc,Mutex};
+use std::net::{SocketAddr,ToSocketAddrs};
+use std::io::{self};
 use std::error::{Error};
-use std::{thread, time, str};
-use std::time::{Duration,Instant};
+use std::{thread, str};
 
-use mio::{self, Token, Poll, PollOpt, Events, Ready};
-use mio::net::{TcpStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener,TcpStream};
+
 use prometheus::{CounterVec,Histogram,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
 use log::{info,warn,error,debug};
-use env_logger;
 use lazy_static::lazy_static;
 
 #[macro_use] extern crate prometheus;
@@ -76,7 +76,8 @@ lazy_static! {
 
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let matches = App::new("mongoproxy")
         .version(crate_version!())
         .about("Proxies MongoDb requests to obtain metrics")
@@ -136,21 +137,22 @@ fn main() {
         matches.occurrences_of("log_mongo_messages") > 0,
     );
 
-    run_proxy(local_hostport, remote_hostport, &app);
+    run_proxy(local_hostport, remote_hostport, &app).await;
 }
 
-fn run_proxy(local_addr: String, remote_addr: String, app: &AppConfig) {
-    let listener = TcpListener::bind(&local_addr).unwrap();
+async fn run_proxy(local_addr: String, remote_addr: String, app: &AppConfig)
+{
+    let mut listener = TcpListener::bind(&local_addr).await.unwrap();
     if remote_addr.is_empty() {
         info!("Proxying {} -> <original dst>", local_addr);
     } else {
         info!("Proxying {} -> {}", local_addr, remote_addr);
     }
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let client_addr = format_client_address(&stream.peer_addr().unwrap());
+    loop {
+        match listener.accept().await {
+            Ok((stream, peer_addr)) => {
+                let client_addr = format_client_address(&peer_addr);
 
                 let server_addr = if remote_addr.is_empty() {
                     if let Some(sockaddr) = dstaddr::orig_dst_addr(&stream) {
@@ -161,8 +163,7 @@ fn run_proxy(local_addr: String, remote_addr: String, app: &AppConfig) {
                         debug!("Original destination address: {:?}", sockaddr);
                         sockaddr.to_string()
                     } else {
-                        error!("Host not set and destination address not found: {}",
-                            &stream.peer_addr().unwrap());
+                        error!("Host not set and destination address not found: {}", client_addr);
                         // TODO: Increase a counter
                         continue;
                     }
@@ -174,9 +175,9 @@ fn run_proxy(local_addr: String, remote_addr: String, app: &AppConfig) {
 
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
-                thread::spawn(move || {
+                tokio::spawn(async move {
                     info!("{:?} new connection from {}", thread::current().id(), client_addr);
-                    match handle_connection(&server_addr, TcpStream::from_stream(stream).unwrap(), app) {
+                    match handle_connection(&server_addr, stream, app).await {
                         Ok(_) => {
                             info!("{:?} {} closing connection.", thread::current().id(), client_addr);
                             DISCONNECTION_COUNT_TOTAL
@@ -203,147 +204,79 @@ fn run_proxy(local_addr: String, remote_addr: String, app: &AppConfig) {
 // between the client and the server. Also split the traffic to MongoDb protocol
 // parser, so that we can get some stats out of this.
 //
-fn handle_connection(server_addr: &str, mut client_stream: TcpStream, app: AppConfig) -> std::io::Result<()> {
-    const CLIENT: Token = Token(1);
-    const SERVER: Token = Token(2);
-
-    let poll = Poll::new().unwrap();
-    let mut events = Events::with_capacity(16);
-
+async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: AppConfig)
+    -> Result<(), Box<dyn Error>>
+{
     info!("{:?} connecting to server: {}", thread::current().id(), server_addr);
     let timer = SERVER_CONNECT_TIME_SECONDS.with_label_values(&[server_addr]).start_timer();
+    // TODO: can haz async DNS lookup?
     let server_addr = lookup_address(server_addr)?;
-    let mut server_stream = TcpStream::connect(&server_addr)?;
-    poll.register(&server_stream, SERVER, Ready::all(), PollOpt::edge()).unwrap();
-
-    debug!("{:?} Waiting server connection to become ready.", thread::current().id());
-    'outer: loop {
-        // TODO: This poll could also hang forever in case the server is not responding.
-        // Consider timing out.
-        poll.poll(&mut events, None).unwrap();
-        for event in events.iter() {
-            if let SERVER = event.token() {
-                if event.readiness().is_writable() {
-                    break 'outer;
-                }
-            }
-        }
-    }
+    let server_stream = TcpStream::connect(&server_addr).await?;
     timer.observe_duration();
 
-    poll.register(&client_stream, CLIENT, Ready::readable() | Ready::writable(),
-        PollOpt::edge()).unwrap();
-
-    let mut done = false;
     let client_addr = format_client_address(&client_stream.peer_addr()?);
-    let mut tracker = MongoStatsTracker::new(&client_addr, &server_addr.to_string(), server_addr, app);
-    let mut last_time = Instant::now();
 
-    let _ = client_stream.set_nodelay(true);
-    let _ = server_stream.set_nodelay(true);
+    let tracker = Arc::new(Mutex::new(
+            MongoStatsTracker::new(
+                &client_addr,
+                &server_addr.to_string(),
+                server_addr,
+                app)));
+    let client_tracker = tracker.clone();
+    let server_tracker = tracker.clone();
 
-    while !done {
-        poll.poll(&mut events, Some(Duration::from_millis(1000))).unwrap();
+    client_stream.set_nodelay(true)?;
+    server_stream.set_nodelay(true)?;
 
-        let mut connection_was_idle = true;
-        for event in events.iter() {
-            match event.token() {
-                CLIENT => {
-                    let timer = CLIENT_TRACKING_TIME_SECONDS.start_timer();
-                    connection_was_idle = false;
-                    let mut track_client = |buf: &[u8]| {
-                        tracker.track_client_request(buf);
-                    };
-                    timer.observe_duration();
+    let (mut read_client, mut write_client) = client_stream.into_split();
+    let (mut read_server, mut write_server) = server_stream.into_split();
 
-                    if !copy_stream_with_fn(&mut client_stream, &mut server_stream, &mut track_client)? {
-                        info!("{:?} {} client EOF", thread::current().id(), client_stream.peer_addr()?);
-                        done = true;
-                    }
-                },
-                SERVER => {
-                    let timer = SERVER_TRACKING_TIME_SECONDS.start_timer();
-                    connection_was_idle = false;
-                    let mut track_server = |buf: &[u8]| {
-                        tracker.track_server_response(buf);
-                    };
-                    timer.observe_duration();
+    // Read from client, write to server
+    let client_task = tokio::spawn(async move {
+        let mut buf = [0; 1024];
 
-                    if !copy_stream_with_fn(&mut server_stream, &mut client_stream, &mut track_server)? {
-                        info!("{:?} {} server EOF", thread::current().id(), server_stream.peer_addr()?);
-                        done = true;
-                    }
-                },
-                _ => {}
+        loop {
+            let timer = CLIENT_TRACKING_TIME_SECONDS.start_timer();
+
+            let len = read_client.read(&mut buf).await?;
+
+            if len > 0 {
+                write_server.write_all(&buf[0..len]).await?;
+            } else {
+                return Ok::<(), Box<dyn Error+Sync+Send>>(());
             }
+
+            let mut tracker = client_tracker.lock().unwrap();
+            tracker.track_client_request(&buf[..len]);
+
+            timer.observe_duration();
         }
+    });
 
-        let now = Instant::now();
-        let duration = now.duration_since(last_time).as_secs_f64();
+    // Read from server, write to client
+    let server_task = tokio::spawn(async move {
+        let mut buf = [0; 1024];
 
-        CLIENT_CONNECT_TIME_SECONDS
-            .with_label_values(&[&client_addr])
-            .inc_by(duration);
-
-        if connection_was_idle {
-            CLIENT_IDLE_TIME_SECONDS
-                .with_label_values(&[&client_addr])
-                .inc_by(duration);
-        }
-
-        last_time = now;
-    }
-
-    Ok(())
-}
-
-// Copy bytes from one stream to another, passing the read bytes to a callback.
-// Consumes all input until read would block. Assumes that we are always ready
-// to send bytes.
-//
-// Returns false if EOF reached on the from_stream.
-fn copy_stream_with_fn(from_stream: &mut TcpStream, mut to_stream: &mut TcpStream,
-        process_bytes: &mut dyn FnMut(&[u8])) -> std::io::Result<bool> {
-
-    let mut buf = [0; 1024];
-
-    loop {
-        match from_stream.read(&mut buf) {
-            Ok(0) => {
-                return Ok(false);   // EOF
+        loop {
+            let timer = SERVER_TRACKING_TIME_SECONDS.start_timer();
+            let len = read_server.read(&mut buf).await?;
+            if len > 0 {
+                write_client.write_all(&buf[0..len]).await?;
+            } else {
+                return Ok::<(), Box<dyn Error+Sync+Send>>(());
             }
-            Ok(len) => {
-                write_to_stream(&mut to_stream, &buf[..len])?;
-                process_bytes(&buf[0..len]);
-            },
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                return Ok(true)
-            },
-            Err(e) => {
-                return Err(e);
-            },
-        }
-    }
-}
 
-// Write the buffer to the stream, waiting out the EAGAIN errors
-// TODO: proper handling for EWOULDBLOCK
-fn write_to_stream(stream: &mut TcpStream, mut buf: &[u8]) -> std::io::Result<()> {
-    while !buf.is_empty() {
-        match stream.write(buf) {
-            Ok(len) => {
-                buf = &buf[len..];
-            },
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(time::Duration::from_millis(1));
-            },
-            Err(other) => {
-                error!("{:?}: write error: {}", thread::current().id(), other);
-                return Err(other);
-            },
+            let mut tracker = server_tracker.lock().unwrap();
+            tracker.track_server_response(&buf[..len]);
+
+            timer.observe_duration();
         }
+    });
+
+    match tokio::try_join!(client_task, server_task) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(Box::new(e))
     }
-    Ok(())
 }
 
 fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
