@@ -78,7 +78,6 @@ lazy_static! {
             "mongoproxy_client_idle_time_seconds",
             "How long has this connection been idle",
             &["client"]).unwrap();
-
 }
 
 #[tokio::main]
@@ -142,10 +141,15 @@ async fn main() {
         matches.occurrences_of("log_mongo_messages") > 0,
     );
 
-    run_proxy(local_hostport, remote_hostport, &app).await;
+    run_accept_loop(local_hostport, remote_hostport, &app).await;
 }
 
-async fn run_proxy(local_addr: String, remote_addr: String, app: &AppConfig)
+// Accept connections in a loop and spawn a task to proxy them. If remote address is not explicitly
+// specified attempt to proxy to the original destination obtained with SO_ORIGINAL_DST socket
+// option.
+//
+// Never returns.
+async fn run_accept_loop(local_addr: String, remote_addr: String, app: &AppConfig)
 {
     let mut listener = TcpListener::bind(&local_addr).await.unwrap();
     if remote_addr.is_empty() {
@@ -205,16 +209,14 @@ async fn run_proxy(local_addr: String, remote_addr: String, app: &AppConfig)
     }
 }
 
-// Main proxy logic. Open a connection to the server and start passing bytes
-// between the client and the server. Also split the traffic to MongoDb protocol
-// parser, so that we can get some stats out of this.
+// Open a connection to the server and start passing bytes between the client and the server. Also
+// split the traffic to MongoDb protocol parser, so that we can get some stats out of this.
 //
 async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: AppConfig)
     -> Result<(), Box<dyn Error>>
 {
     info!("{:?} connecting to server: {}", thread::current().id(), server_addr);
     let timer = SERVER_CONNECT_TIME_SECONDS.with_label_values(&[server_addr]).start_timer();
-    // TODO: can haz async DNS lookup?
     let server_addr = lookup_address(server_addr)?;
     let server_stream = TcpStream::connect(&server_addr).await?;
     timer.observe_duration();
@@ -277,6 +279,8 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
             timer.observe_duration();
         }
     });
+
+    // TODO: Before returning we need to also calculate the connected / idle time
 
     match tokio::try_join!(client_task, server_task) {
         Ok(_) => Ok(()),
