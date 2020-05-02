@@ -265,6 +265,9 @@ async fn proxy_bytes(
             } else {
                 tracker.track_server_response(&buf[..len]);
             }
+        } else {
+            // EOF on read
+            return Ok(());
         }
     }
 }
