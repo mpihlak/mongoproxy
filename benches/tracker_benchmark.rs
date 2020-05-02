@@ -4,7 +4,9 @@ extern crate bson;
 extern crate mongoproxy;
 
 use std::io::{Cursor,Write};
+use std::net::{ToSocketAddrs};
 
+use mongoproxy::appconfig::{AppConfig};
 use mongoproxy::mongodb::tracker::{MongoStatsTracker};
 use mongoproxy::mongodb::parser::MongoProtocolParser;
 use mongoproxy::mongodb::messages::{self,MsgHeader,MsgOpMsg};
@@ -16,7 +18,7 @@ criterion_group!(benches, bench_tracker, bench_bson_parser, bench_cstring);
 criterion_main!(benches);
 
 fn create_message(op: &str, op_value: &str, mut buf: impl Write) {
-    let msg = MsgOpMsg{ flag_bits: 0, documents: Vec::new() };
+    let msg = MsgOpMsg{ flag_bits: 0, documents: Vec::new(), section_bytes: Vec::new() };
     let mut doc = bson::Document::new();
     doc.insert(op.to_string(), bson::Bson::String(op_value.to_string()));
 
@@ -50,13 +52,18 @@ fn bench_tracker(c: &mut Criterion) {
     let mut parser = MongoProtocolParser::new();
 
     // Try 2 parses to validate that we have a complete message
-    assert!(parser.parse_buffer(&client_buf).len() == 1);
-    assert!(parser.parse_buffer(&client_buf).len() == 1);
+    assert!(parser.parse_buffer(&client_buf, false, false).len() == 1);
+    assert!(parser.parse_buffer(&client_buf, false, false).len() == 1);
 
     c.bench_function("parse_mongodb_message",
-        |b| b.iter(|| { parser.parse_buffer(&client_buf) } ));
+        |b| b.iter(|| { parser.parse_buffer(&client_buf, false, false) } ));
 
-    let mut tracker = MongoStatsTracker::new("127.0.0.1", "127.0.0.2", None);
+    let app = AppConfig::new(None, false);
+    let mut tracker = MongoStatsTracker::new(
+        "127.0.0.1",
+        "127.0.0.2",
+        "127.0.0.2:27017".to_socket_addrs().unwrap().next().unwrap(),
+        app);
 
     c.bench_function("track_client_request",
         |b| b.iter(|| tracker.track_client_request(&client_buf)));
