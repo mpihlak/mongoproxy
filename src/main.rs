@@ -6,8 +6,9 @@ use std::{thread, str};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener,TcpStream};
+use tokio::net::tcp::{OwnedReadHalf,OwnedWriteHalf};
 
-use prometheus::{CounterVec,Histogram,HistogramVec,Encoder,TextEncoder};
+use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
 use log::{info,warn,error,debug};
 use lazy_static::lazy_static;
@@ -49,18 +50,6 @@ lazy_static! {
             "mongoproxy_server_connect_time_seconds",
             "Time it takes to look up and connect to a server",
             &["server_addr"]).unwrap();
-
-    static ref CLIENT_TRACKING_TIME_SECONDS: Histogram =
-        register_histogram!(
-            "mongoproxy_client_tracking_time_seconds",
-            "Time spent moving bytes from client to server",
-            vec![0.000_001, 0.00001, 0.0001, 0.001, 0.01, 0.1]).unwrap();
-
-    static ref SERVER_TRACKING_TIME_SECONDS: Histogram =
-        register_histogram!(
-            "mongoproxy_server_tracking_time_seconds",
-            "Time spent moving bytes from client to server",
-            vec![0.000_001, 0.00001, 0.0001, 0.001, 0.01, 0.1]).unwrap();
 
     static ref CLIENT_CONNECT_TIME_SECONDS: CounterVec =
         register_counter_vec!(
@@ -224,8 +213,8 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
                 &server_addr.to_string(),
                 server_addr,
                 app)));
-    let client_tracker = tracker.clone();
-    let server_tracker = tracker.clone();
+    let mut client_tracker = tracker.clone();
+    let mut server_tracker = tracker.clone();
 
     client_stream.set_nodelay(true)?;
     server_stream.set_nodelay(true)?;
@@ -235,51 +224,43 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
 
     // Read from client, write to server
     let client_task = tokio::spawn(async move {
-        let mut buf = [0; 1024];
-
-        loop {
-            let timer = CLIENT_TRACKING_TIME_SECONDS.start_timer();
-
-            let len = read_client.read(&mut buf).await?;
-
-            if len > 0 {
-                write_server.write_all(&buf[0..len]).await?;
-            } else {
-                return Ok::<(), Box<dyn Error+Sync+Send>>(());
-            }
-
-            let mut tracker = client_tracker.lock().unwrap();
-            tracker.track_client_request(&buf[..len]);
-
-            timer.observe_duration();
-        }
+        proxy_bytes(&mut read_client, &mut write_server, &mut client_tracker, true).await?;
+        Ok::<(), Box<dyn Error+Sync+Send>>(())
     });
 
     // Read from server, write to client
     let server_task = tokio::spawn(async move {
-        let mut buf = [0; 1024];
-
-        loop {
-            let timer = SERVER_TRACKING_TIME_SECONDS.start_timer();
-            let len = read_server.read(&mut buf).await?;
-            if len > 0 {
-                write_client.write_all(&buf[0..len]).await?;
-            } else {
-                return Ok::<(), Box<dyn Error+Sync+Send>>(());
-            }
-
-            let mut tracker = server_tracker.lock().unwrap();
-            tracker.track_server_response(&buf[..len]);
-
-            timer.observe_duration();
-        }
+        proxy_bytes(&mut read_server, &mut write_client, &mut server_tracker, false).await?;
+        Ok::<(), Box<dyn Error+Sync+Send>>(())
     });
-
-    // TODO: Before returning we need to also calculate the connected / idle time
 
     match tokio::try_join!(client_task, server_task) {
         Ok(_) => Ok(()),
         Err(e) => Err(Box::new(e))
+    }
+}
+
+// Move bytes between sockets
+async fn proxy_bytes(
+    read_from: &mut OwnedReadHalf,
+    write_to: &mut OwnedWriteHalf,
+    tracker: &mut Arc<Mutex<MongoStatsTracker>>,
+    is_client_tracker: bool,
+) -> Result<(), Box<dyn Error+Sync+Send>> {
+    loop {
+        let mut buf = [0; 1024];
+        let len = read_from.read(&mut buf).await?;
+
+        if len > 0 {
+            write_to.write_all(&buf[0..len]).await?;
+
+            let mut tracker = tracker.lock().unwrap();
+            if is_client_tracker {
+                tracker.track_client_request(&buf[..len]);
+            } else {
+                tracker.track_server_response(&buf[..len]);
+            }
+        }
     }
 }
 
