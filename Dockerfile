@@ -1,4 +1,4 @@
-FROM rust:1.39-buster as builder
+FROM rust:1.43-buster as builder
 
 WORKDIR /build
 RUN USER=root cargo new --bin mongoproxy
