@@ -14,10 +14,11 @@ RUN rm src/*.rs
 RUN rm target/*/deps/mongoproxy*
 RUN rm target/*/mongoproxy
 
-# Now, build mongoproxy
+# Now, build and test mongoproxy
 COPY src/ ./src/
 COPY benches/ ./benches/
 RUN cargo build --release
+RUN cargo test --release
 
 FROM debian:buster-slim
 
