@@ -10,13 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@master
-    - name: Run tests
-      run: cargo test
-    - name: Publish mongoproxy image 
-      uses: elgohr/Publish-Docker-Github-Action@master
+    - name: Build and publish mongoproxy image 
+      uses: docker/build-push-action@v1
       with:
-        name: mpihlak/mongoproxy
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
-        cache: true
-        tag_names: true
+        repository: mpihlak/mongoproxy
+        tags: latest
+        tag_with_ref: true
