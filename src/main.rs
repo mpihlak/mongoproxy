@@ -252,14 +252,19 @@ async fn proxy_bytes(
         let len = read_from.read(&mut buf).await?;
 
         if len > 0 {
-            write_to.write_all(&buf[0..len]).await?;
-
-            let mut tracker = tracker.lock().unwrap();
-            if is_client_tracker {
-                tracker.track_client_request(&buf[..len]);
-            } else {
-                tracker.track_server_response(&buf[..len]);
+            // Handle request tracking before writing any data to reduce
+            // the chances of server response arriving before the client
+            // request has been tracked.
+            {
+                let mut tracker = tracker.lock().unwrap();
+                if is_client_tracker {
+                    tracker.track_client_request(&buf[..len]);
+                } else {
+                    tracker.track_server_response(&buf[..len]);
+                }
             }
+
+            write_to.write_all(&buf[0..len]).await?;
         } else {
             // EOF on read
             return Ok(());
