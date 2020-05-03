@@ -10,7 +10,7 @@ else:
 count = 0
 while 1:
     count += 1
-    print "#%d connecting to %s"  % (count, mongo_uri)
+    print(f"#{count} connecting to {mongo_uri}")
     con = pymongo.MongoClient(mongo_uri)
 
     bigcollection = con['test']['bigcollection']
@@ -20,4 +20,4 @@ while 1:
         for res in bigcollection.find({}).limit(10):
             pass
     elapsed = time.time() - start
-    print "%d queries in %.5f seconds, avg %.5f / sec" % (i, elapsed, i / elapsed)
+    print(f"{i} queries in {elapsed:.5f} seconds, avg {i / elapsed:.5f} / sec")
