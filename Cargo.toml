@@ -27,5 +27,4 @@ rustracing = '0.2'
 rustracing_jaeger = '0.2'
 libc = '0.2'
 bson = '0.13'
-mio = '0.6'
 tokio = { version = "0.2.20", features = ["rt-threaded", "net", "tcp", "macros", "io-util"] }
