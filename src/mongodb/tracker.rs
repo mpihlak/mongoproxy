@@ -295,6 +295,10 @@ impl ClientRequest {
             message_length,
         }
     }
+
+    fn is_collection_op(&self) -> bool {
+        !self.coll.is_empty()
+    }
 }
 
 pub struct MongoStatsTracker {
@@ -428,17 +432,17 @@ impl MongoStatsTracker{
     }
 
     fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: MongoMessage, mut client_request: &mut ClientRequest) {
-        // TODO: Here we might not yet have the replicaset and server name labels. So possibly
-        // move those at the end of this function.
-        SERVER_RESPONSE_LATENCY_SECONDS
-            .with_label_values(&self.label_values(&client_request))
-            .observe(client_request.message_time.elapsed().as_secs_f64());
-        SERVER_RESPONSE_SIZE_TOTAL
-            .with_label_values(&self.label_values(&client_request))
-            .observe(hdr.message_length as f64);
-        CLIENT_REQUEST_SIZE_TOTAL
-            .with_label_values(&self.label_values(&client_request))
-            .observe(client_request.message_length as f64);
+        if client_request.is_collection_op() {
+            SERVER_RESPONSE_LATENCY_SECONDS
+                .with_label_values(&self.label_values(&client_request))
+                .observe(client_request.message_time.elapsed().as_secs_f64());
+            SERVER_RESPONSE_SIZE_TOTAL
+                .with_label_values(&self.label_values(&client_request))
+                .observe(hdr.message_length as f64);
+            CLIENT_REQUEST_SIZE_TOTAL
+                .with_label_values(&self.label_values(&client_request))
+                .observe(client_request.message_length as f64);
+        }
 
         // Look into the server response and exract some counters from it.
         // Things like number of documents returned, inserted, updated, deleted.
@@ -502,18 +506,22 @@ impl MongoStatsTracker{
                 if let Some(span) = &mut client_request.span {
                     span.set_tag(|| Tag::new("documents_returned", n as i64));
                 }
-                DOCUMENTS_RETURNED_TOTAL
-                    .with_label_values(&self.label_values(&client_request))
-                    .observe(n as f64);
+                if client_request.is_collection_op() {
+                    DOCUMENTS_RETURNED_TOTAL
+                        .with_label_values(&self.label_values(&client_request))
+                        .observe(n as f64);
+                }
             }
 
             if let Some(n) = n_docs_changed {
                 if let Some(span) = &mut client_request.span {
                     span.set_tag(|| Tag::new("documents_changed", n as i64));
                 }
-                DOCUMENTS_CHANGED_TOTAL
-                    .with_label_values(&self.label_values(&client_request))
-                    .observe(f64::from(n.abs()));
+                if client_request.is_collection_op() {
+                    DOCUMENTS_CHANGED_TOTAL
+                        .with_label_values(&self.label_values(&client_request))
+                        .observe(f64::from(n.abs()));
+                }
             }
 
             // Handle the span creation for the cursor operations.
