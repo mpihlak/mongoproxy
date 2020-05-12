@@ -241,6 +241,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
 
     match tokio::try_join!(client_task, server_task) {
         Ok(_) => Ok(()),
+        Err(e) if e.to_string() == "EOF" => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -271,8 +272,8 @@ async fn proxy_bytes(
 
             write_to.write_all(&buf[0..len]).await?;
         } else {
-            // EOF on read
-            return Ok(());
+            // EOF on read, return Err to signal try_join! to return
+            return Err("EOF".into());
         }
     }
 }
