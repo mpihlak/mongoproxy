@@ -228,20 +228,20 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let (mut read_server, mut write_server) = server_stream.into_split();
 
     // Read from client, write to server
-    let client_task = tokio::spawn(async move {
+    let client_task = async {
         proxy_bytes(&mut read_client, &mut write_server, &mut client_tracker, true).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
-    });
+    };
 
     // Read from server, write to client
-    let server_task = tokio::spawn(async move {
+    let server_task = async {
         proxy_bytes(&mut read_server, &mut write_client, &mut server_tracker, false).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
-    });
+    };
 
     match tokio::try_join!(client_task, server_task) {
         Ok(_) => Ok(()),
-        Err(e) => Err(Box::new(e))
+        Err(e) => Err(e),
     }
 }
 
