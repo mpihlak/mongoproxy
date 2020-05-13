@@ -10,6 +10,8 @@ Performance overhead is minimal. In sidecar mode, expect to add 3-5% CPU to the 
 
 Since it uses a thread per connection, `MALLOC_ARENA_MAX` needs to be tuned to avoid excessive memory usage due to how `malloc()` handles per-thread arenas. 2 is a good starting value.
 
+_Note_: there's an experimental branch `async-with-tokio` that uses async/await with Tokio. From first impressions, memory usage is much better but CPU usage is much worse. So not sure if it's worth the extra complexity.
+
 Jaeger tracing is still experimental. It does generate traces, but the interface is likely to change in the future. Specifically, the `$comment` field could be used for passing along other information as well (eg. additional Prometheus labels, function name, file:line, etc.).
 
 ## Usage
