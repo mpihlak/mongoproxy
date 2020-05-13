@@ -218,8 +218,8 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
                 &server_addr.to_string(),
                 server_addr,
                 app)));
-    let mut client_tracker = tracker.clone();
-    let mut server_tracker = tracker.clone();
+    let client_tracker = tracker.clone();
+    let server_tracker = tracker.clone();
 
     client_stream.set_nodelay(true)?;
     server_stream.set_nodelay(true)?;
@@ -229,13 +229,19 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
 
     // Read from client, write to server
     let client_task = async {
-        proxy_bytes(&mut read_client, &mut write_server, &mut client_tracker, true).await?;
+        proxy_bytes_with(&mut read_client, &mut write_server, |buf| {
+            let mut tracker = client_tracker.lock().unwrap();
+            tracker.track_client_request(buf);
+        }).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
     };
 
     // Read from server, write to client
     let server_task = async {
-        proxy_bytes(&mut read_server, &mut write_client, &mut server_tracker, false).await?;
+        proxy_bytes_with(&mut read_server, &mut write_client, |buf| {
+            let mut tracker = server_tracker.lock().unwrap();
+            tracker.track_server_response(buf);
+        }).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
     };
 
@@ -246,13 +252,14 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     }
 }
 
-// Move bytes between sockets
-async fn proxy_bytes(
+// Move bytes between sockets, calling the provided tracker function
+async fn proxy_bytes_with<F>(
     read_from: &mut OwnedReadHalf,
     write_to: &mut OwnedWriteHalf,
-    tracker: &mut Arc<Mutex<MongoStatsTracker>>,
-    is_client_tracker: bool,
-) -> Result<(), Box<dyn Error+Sync+Send>> {
+    mut tracker: F
+) -> Result<(), Box<dyn Error+Sync+Send>>
+    where F: FnMut(&[u8])
+{
     loop {
         let mut buf = [0; 1024];
         let len = read_from.read(&mut buf).await?;
@@ -261,15 +268,7 @@ async fn proxy_bytes(
             // Handle request tracking before writing any data to reduce
             // the chances of server response arriving before the client
             // request has been tracked.
-            {
-                let mut tracker = tracker.lock().unwrap();
-                if is_client_tracker {
-                    tracker.track_client_request(&buf[..len]);
-                } else {
-                    tracker.track_server_response(&buf[..len]);
-                }
-            }
-
+            tracker(&buf[..len]);
             write_to.write_all(&buf[0..len]).await?;
         } else {
             // EOF on read, return Err to signal try_join! to return
