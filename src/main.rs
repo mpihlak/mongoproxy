@@ -55,18 +55,6 @@ lazy_static! {
             "mongoproxy_server_connect_time_seconds",
             "Time it takes to look up and connect to a server",
             &["server_addr"]).unwrap();
-
-    static ref CLIENT_CONNECT_TIME_SECONDS: CounterVec =
-        register_counter_vec!(
-            "mongoproxy_client_connected_time_seconds",
-            "How long has this client been connected",
-            &["client"]).unwrap();
-
-    static ref CLIENT_IDLE_TIME_SECONDS: CounterVec =
-        register_counter_vec!(
-            "mongoproxy_client_idle_time_seconds",
-            "How long has this connection been idle",
-            &["client"]).unwrap();
 }
 
 #[tokio::main]
