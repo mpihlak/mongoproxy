@@ -13,7 +13,7 @@ spec:
     spec:
       containers:
       - name: mongoproxy
-        image: mpihlak/mongoproxy:v0.2.6-1
+        image: mpihlak/mongoproxy:v0.4.1
         ports:
         - containerPort: 27017
           name: mongo-port
@@ -43,8 +43,8 @@ spec:
           periodSeconds: 2
         resources:
           limits:
-            memory: 256Mi
-            cpu: 200m
-          requests:
             memory: 32Mi
-            cpu: 100m
+            cpu: 20m
+          requests:
+            memory: 8Mi
+            cpu: 10m

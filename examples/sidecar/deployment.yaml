@@ -16,7 +16,7 @@ spec:
       initContainers:
       # init-container to do port 27017 redirection to the proxy
       - name: init-mongoproxy
-        image: mpihlak/mongoproxy-init:v0.2.6-1
+        image: mpihlak/mongoproxy-init:v0.4.1
         securityContext:
           capabilities:
             add: ["NET_ADMIN"]
@@ -25,7 +25,7 @@ spec:
       # to it's original destination address.
       - name: mongoproxy
         command: [ "./mongoproxy", "--proxy=27111" ]
-        image: mpihlak/mongoproxy:v0.2.6-1
+        image: mpihlak/mongoproxy:v0.4.1
         securityContext:
           runAsUser: 9999
         env:
@@ -48,11 +48,11 @@ spec:
           periodSeconds: 2
         resources:
           limits:
-            cpu: 100m
-            memory: 128Mi
+            cpu: 20m
+            memory: 32Mi
           requests:
             cpu: 10m
-            memory: 32Mi
+            memory: 8Mi
       # the "application" container.
       # "apk add mongodb" and try connecting to an existing Mongo database
       - name: app

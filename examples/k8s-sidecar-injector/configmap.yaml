@@ -10,14 +10,14 @@ data:
     name: "mongoproxy"
     initContainers:
     - name: init-mongoproxy
-      image: mpihlak/mongoproxy-init:v0.2.6-1
+      image: mpihlak/mongoproxy-init:v0.4.1
       securityContext:
         capabilities:
           add: ["NET_ADMIN"]
     containers:
     - name: mongoproxy
       command: [ "./mongoproxy", "--proxy=27111" ]
-      image: mpihlak/mongoproxy:v0.2.6-1
+      image: mpihlak/mongoproxy:v0.4.1
       securityContext:
         runAsUser: 9999
       env:
@@ -40,8 +40,8 @@ data:
         periodSeconds: 2
       resources:
         limits:
-          cpu: 100m
-          memory: 128Mi
-        requests:
-          cpu: 30m
+          cpu: 20m
           memory: 32Mi
+        requests:
+          cpu: 10m
+          memory: 8Mi
