@@ -21,11 +21,6 @@ use mongoproxy::dstaddr;
 use mongoproxy::appconfig::{AppConfig};
 use mongoproxy::mongodb::tracker::{MongoStatsTracker};
 
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
 const ADMIN_PORT: &str = "9898";
