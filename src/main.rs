@@ -27,6 +27,12 @@ const ADMIN_PORT: &str = "9898";
 const SERVICE_NAME: &str = "mongoproxy";
 
 lazy_static! {
+    static ref MONGOPROXY_RUNTIME_INFO: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_runtime_info",
+            "Runtime information about Mongoproxy",
+            &["version", "proxy", "service_name", "log_mongo_messages", "enable_jaeger"]).unwrap();
+
     static ref CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
             "mongoproxy_client_connections_established_total",
@@ -94,7 +100,7 @@ async fn main() {
     let admin_port = matches.value_of("admin_port").unwrap_or(ADMIN_PORT);
     let admin_addr = format!("0.0.0.0:{}", admin_port);
     let service_name = matches.value_of("service_name").unwrap_or(SERVICE_NAME);
-
+    let log_mongo_messages = matches.occurrences_of("log_mongo_messages") > 0;
     let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
     let jaeger_addr = lookup_address(matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR)).unwrap();
 
@@ -110,8 +116,16 @@ async fn main() {
 
     let app = AppConfig::new(
         tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr),
-        matches.occurrences_of("log_mongo_messages") > 0,
+        log_mongo_messages,
     );
+
+    MONGOPROXY_RUNTIME_INFO.with_label_values(&[
+        crate_version!(),
+        &proxy_spec,
+        &service_name,
+        if log_mongo_messages { "true" } else { "false" },
+        if enable_jaeger { "true" } else { "false" } ],
+    ).inc();
 
     run_accept_loop(local_hostport, remote_hostport, &app).await;
 }
