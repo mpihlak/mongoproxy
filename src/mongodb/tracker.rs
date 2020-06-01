@@ -458,6 +458,9 @@ impl MongoStatsTracker{
                 }
                 self.process_response_documents(&mut client_request, r.get_documents());
             },
+            MongoMessage::Compressed(m) => {
+                debug!("Compressed message: {:?}", m);
+            },
             other => {
                 warn!("Unrecognized message_type: {:?}", other);
             },
