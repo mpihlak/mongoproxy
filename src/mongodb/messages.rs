@@ -28,6 +28,7 @@ lazy_static! {
             // TODO: Handle $comment for "aggregate" command anywhere in the "pipeline"
             .with("comment", "/pipeline/0/$match/$comment")
             .with("app_name", "/client/application/name")
+            .with("app_name", "/client/client/application/name") // Workaround for Elixir Mongo driver that has an extra nested "client"
             .with("cursor_id", "/cursor/id")
             .with("docs_returned", "/cursor/firstBatch/[]")     // array length
             .with("docs_returned", "/cursor/nextBatch/[]")      // array length
