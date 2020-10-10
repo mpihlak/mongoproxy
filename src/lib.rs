@@ -4,7 +4,6 @@ extern crate prometheus;
 extern crate lazy_static;
 
 pub mod tracing;
-pub mod bson_lite;
 pub mod mongodb;
 pub mod dstaddr;
 pub mod appconfig;

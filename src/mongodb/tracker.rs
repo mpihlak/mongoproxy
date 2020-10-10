@@ -1,6 +1,4 @@
 use super::messages::{MsgHeader,MongoMessage,ResponseDocuments};
-use super::parser::MongoProtocolParser;
-use crate::bson_lite;
 use crate::tracing;
 use crate::appconfig::{AppConfig};
 
@@ -10,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use log::{debug,warn};
 use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
+
+use async_bson::Document;
 
 use rustracing::span::Span;
 use rustracing::tag::Tag;
@@ -224,7 +224,7 @@ impl ClientRequest {
                                         .start();
 
                                     for bytes in m.section_bytes.iter() {
-                                        if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
+                                        if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
                                             // Use the first key in the document as key name
                                             let doc_first_key = doc.keys().next().unwrap_or(&op);
                                             new_span.set_tag(|| Tag::new(
@@ -302,8 +302,6 @@ impl ClientRequest {
 }
 
 pub struct MongoStatsTracker {
-    client:                 MongoProtocolParser,
-    server:                 MongoProtocolParser,
     server_addr:            String,
     server_addr_sa:         std::net::SocketAddr,
     client_addr:            String,
@@ -330,8 +328,6 @@ impl MongoStatsTracker{
                server_addr_sa: std::net::SocketAddr,
                app: AppConfig) -> Self {
         MongoStatsTracker {
-            client: MongoProtocolParser::new(),
-            server: MongoProtocolParser::new(),
             client_addr: client_addr.to_string(),
             server_addr: server_addr.to_string(),
             server_addr_sa,
@@ -347,39 +343,36 @@ impl MongoStatsTracker{
         self.app.tracer.is_some()
     }
 
-    pub fn track_client_request(&mut self, buf: &[u8]) {
-        CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr])
-            .inc_by(buf.len() as f64);
+    pub fn track_client_request(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
+        CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
-        for (hdr, msg) in self.client.parse_buffer(buf, self.is_tracing_enabled(), self.app.log_mongo_messages) {
-            debug!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
+        debug!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
-            // Ignore useless messages
-            if let MongoMessage::None = msg {
-                continue;
-            }
-
-            if self.client_application.is_empty() {
-                if let Some(app_name) = extract_app_name(&msg) {
-                    self.client_application = app_name.to_owned();
-                    APP_CONNECTION_COUNT_TOTAL
-                        .with_label_values(&[&self.client_application])
-                        .inc();
-                }
-            }
-
-            let req = ClientRequest::from(&self, hdr.message_length, &msg);
-
-            // If we're tracking cursors for tracing purposes then also handle
-            // the cleanup.
-            self.maybe_kill_cursors(&req.op, &msg);
-
-            // Keep the client request so that we can keep track to which request
-            // a server response belongs to.
-            self.client_request_map.insert(hdr.request_id, req);
-
-            RESPONSE_MATCH_HASHMAP_CAPACITY.set(self.client_request_map.capacity() as f64);
+        // Ignore useless messages
+        if let MongoMessage::None = msg {
+            return;
         }
+
+        if self.client_application.is_empty() {
+            if let Some(app_name) = extract_app_name(&msg) {
+                self.client_application = app_name.to_owned();
+                APP_CONNECTION_COUNT_TOTAL
+                    .with_label_values(&[&self.client_application])
+                    .inc();
+            }
+        }
+
+        let req = ClientRequest::from(&self, hdr.message_length, &msg);
+
+        // If we're tracking cursors for tracing purposes then also handle
+        // the cleanup.
+        self.maybe_kill_cursors(&req.op, &msg);
+
+        // Keep the client request so that we can keep track to which request
+        // a server response belongs to.
+        self.client_request_map.insert(hdr.request_id, req);
+
+        RESPONSE_MATCH_HASHMAP_CAPACITY.set(self.client_request_map.capacity() as f64);
     }
 
     // Handle "killCursors" to clean up the trace parent hash map
@@ -387,11 +380,11 @@ impl MongoStatsTracker{
         if let MongoMessage::Msg(msg) = msg {
             if op == "killCursors" && self.is_tracing_enabled() && !msg.section_bytes.is_empty() {
                 let bytes = &msg.section_bytes[0];
-                if let Ok(doc) = bson::decode_document(&mut &bytes[..]) {
+                if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
                     if let Ok(cursor_ids) = doc.get_array("cursors") {
                         debug!("Killing cursors: {:?}", cursor_ids);
                         for cur_id in cursor_ids.iter() {
-                            if let bson::Bson::I64(cur_id) = cur_id {
+                            if let bson::Bson::Int64(cur_id) = cur_id {
                                 let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
                                 trace_mapper.remove(&(self.server_addr_sa, *cur_id));
@@ -408,30 +401,27 @@ impl MongoStatsTracker{
         [ &self.client_addr, &self.client_application, &req.op, &req.coll, &req.db, &self.replicaset, &self.server_host]
     }
 
-    pub fn track_server_response(&mut self, buf: &[u8]) {
-        CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr])
-            .inc_by(buf.len() as f64);
+    pub fn track_server_response(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
+        CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
-        for (hdr, msg) in self.server.parse_buffer(buf, false, self.app.log_mongo_messages) {
-            debug!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
+        debug!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
 
-            // Ignore useless messages
-            if let MongoMessage::None = msg {
-                continue;
-            }
+        // Ignore useless messages
+        if let MongoMessage::None = msg {
+            return;
+        }
 
-            if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
-                self.observe_server_response_to(&hdr, msg, &mut client_request);
-                // If the client_request had a span, it will be automatically sent down the
-                // channel as it goes out of scope here.
-            } else {
-                RESPONSE_TO_REQUEST_MISMATCH.inc();
-                warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);
-            }
+        if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
+            self.observe_server_response_to(&hdr, msg, &mut client_request);
+            // If the client_request had a span, it will be automatically sent down the
+            // channel as it goes out of scope here.
+        } else {
+            RESPONSE_TO_REQUEST_MISMATCH.inc();
+            warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);
         }
     }
 
-    fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: MongoMessage, mut client_request: &mut ClientRequest) {
+    fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: &MongoMessage, mut client_request: &mut ClientRequest) {
         if client_request.is_collection_op() {
             SERVER_RESPONSE_LATENCY_SECONDS
                 .with_label_values(&self.label_values(&client_request))
@@ -454,7 +444,7 @@ impl MongoStatsTracker{
             MongoMessage::Reply(r) => {
                 for doc in &r.documents {
                     // The first isMaster response is an OP_REPLY so we need to look at it
-                    self.try_parsing_replicaset(&doc);
+                    self.try_parsing_replicaset(doc);
                 }
                 self.process_response_documents(&mut client_request, r.get_documents());
             },
@@ -467,9 +457,9 @@ impl MongoStatsTracker{
         }
     }
 
-    fn process_response_documents(&mut self, client_request: &mut ClientRequest, documents: &[bson_lite::BsonLiteDocument]) {
+    fn process_response_documents(&mut self, client_request: &mut ClientRequest, documents: &[Document]) {
         for section in documents {
-            self.try_parsing_replicaset(&section);
+            self.try_parsing_replicaset(section);
 
             if let Some(ok) = section.get_float("ok") {
                 if ok == 0.0 {
@@ -575,7 +565,7 @@ impl MongoStatsTracker{
         }
     }
 
-    fn try_parsing_replicaset(&mut self, doc: &bson_lite::BsonLiteDocument) {
+    fn try_parsing_replicaset(&mut self, doc: &Document) {
         if let Some(op) = doc.get_str("op") {
             if op == "hosts" {
                 if let Some(replicaset) = doc.get_str("replicaset") {

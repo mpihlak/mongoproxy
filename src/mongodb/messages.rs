@@ -1,41 +1,78 @@
-use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
-use std::io::{self, Read, BufRead, Write, Cursor};
 use std::fmt;
 use std::{thread};
 use log::{warn,info,debug};
-use crate::bson_lite::{self,FieldSelector,BsonLiteDocument,read_cstring};
+use byteorder::{LittleEndian, WriteBytesExt};
+use async_bson::{DocumentParser, Document, read_cstring};
+use prometheus::{CounterVec,Histogram};
 
-extern crate bson;
+use std::io::{Read, Write, Cursor};
+use tokio::io::{self, AsyncReadExt, Result};
+use bson;
 
 
 pub const HEADER_LENGTH: usize = 16;
 
+pub trait AsyncReadExtPlus: AsyncReadExt+Unpin+Send {}
+impl <T>AsyncReadExtPlus for T where T: AsyncReadExt+Unpin+Send {}
 
 lazy_static! {
-    static ref MONGO_BSON_FIELD_SELECTOR: FieldSelector<'static> =
-        FieldSelector::build()
-            .with("op", "/#1")                                // first field name
-            .with("op_value", "/@1")                          // first field value
-            .with("db", "/$db")
-            .with("collection", "/collection")
-            .with("ok", "/ok")
-            .with("replicaset", "/setName")
-            .with("server_host", "/me")
-            .with("comment", "/comment")
-            .with("comment", "/q/$comment")
-            .with("comment", "/query/$comment")
-            .with("comment", "/filter/$comment")
-            // TODO: Handle $comment for "aggregate" command anywhere in the "pipeline"
-            .with("comment", "/pipeline/0/$match/$comment")
-            .with("app_name", "/client/application/name")
-            .with("app_name", "/client/client/application/name") // Workaround for Elixir Mongo driver that has an extra nested "client"
-            .with("cursor_id", "/cursor/id")
-            .with("docs_returned", "/cursor/firstBatch/[]")     // array length
-            .with("docs_returned", "/cursor/nextBatch/[]")      // array length
-            .with("n", "/n")
-            .with("n", "/lastErrorObject/n")                    // findAndModify returns this
-            .with("n_modified", "/nModified");
+    static ref MONGO_DOC_PARSER: DocumentParser<'static> =
+        DocumentParser::new()
+            .match_name_at("/", 1, "op")
+            .match_value_at("/", 1, "op_value")
+            .match_exact("/$db", "db")
+            .match_exact("/collection", "collection")
+            .match_exact("/ok", "ok")
+            .match_exact("/setName", "replicaset")
+            .match_exact("/me", "server_host")
+            .match_exact("/comment", "comment")
+            .match_exact("/q/$comment", "comment")
+            .match_exact("/query/$comment", "comment")
+            .match_exact("/filter/$comment", "comment")
+            // TODO: support comments also in other pipeline steps
+            .match_exact("/pipeline/0/$match/$comment", "comment")
+            .match_exact("/client/application/name", "app_name")
+            // Workaround for Elixir Mongo driver that has an extra nested "client"
+            .match_exact("/client/client/application/name", "app_name")
+            .match_exact("/cursor/id", "cursor_id")
+            .match_array_len("/cursor/firstBatch", "docs_returned")
+            .match_array_len("/cursor/nextBatch", "docs_returned")
+            .match_exact("/n", "n")
+            // findAndModify returns number of collection in lastErrorObject/n
+            .match_exact("/lastErrorObject/n", "n")                    
+            .match_exact("/nModified", "n_modified");
+
+    static ref OPCODE_COUNTER: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_opcode_count_total",
+            "Number of different opcodes encountered",
+            &["op"]).unwrap();
+
+    static ref UNSUPPORTED_OPCODE_COUNTER: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_unsupported_op_code_count_total",
+            "Number of unrecognized opcodes in MongoDb header",
+            &["op"]).unwrap();
+
+    static ref HEADER_PARSE_ERRORS_COUNTER: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_header_parse_error_count_total",
+            "Header parse errors",
+            &["error"]).unwrap();
+
+    static ref MESSAGE_PARSE_ERRORS_COUNTER: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_message_parse_error_count_total",
+            "Message body parse errors",
+            &["error"]).unwrap();
+
+    static ref PARSER_BUFFER_SIZE: Histogram =
+        register_histogram!(
+            "mongoproxy_parser_buf_size",
+            "Parser buffer size distribution",
+            vec![1000.0, 10000.0, 100_000.0, 1_000_000.0, 10_000_000.0]).unwrap();
 }
+
 
 #[derive(Debug)]
 pub enum OpCode{
@@ -80,8 +117,42 @@ impl fmt::Display for MongoMessage {
     }
 }
 
+impl MongoMessage {
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+        let hdr = MsgHeader::from_reader(&mut rdr).await?;
+
+        OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
+
+        // XXX: log_mongo_messages and trace_msg_body are not supported.
+        // I don't know how at the moment. Maybe drop them?
+
+        let msg = match hdr.op_code {
+               1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr, false).await?),
+            2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr, false).await?),
+            2005 => MongoMessage::GetMore(MsgOpGetMore::from_reader(&mut rdr).await?),
+            2001 => MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr).await?),
+            2006 => MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr).await?),
+            2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr).await?),
+            2012 => MongoMessage::Compressed(MsgOpCompressed::from_reader(&mut rdr).await?),
+            2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr, false, false).await?),
+            2010 | 2011 => {
+                // This is an undocumented legacy protocol that some clients (bad Robo3T)
+                // still use. We ignore it.
+                MongoMessage::None
+            },
+            _ => {
+                UNSUPPORTED_OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
+                warn!("Unhandled OP: {}", hdr.op_code);
+                MongoMessage::None
+            },
+        };
+
+        Ok(msg)
+    }
+}
+
 #[allow(dead_code)]
-pub fn debug_print(mut rdr: impl Read) -> io::Result<()> {
+pub fn debug_print(mut rdr: impl Read) -> Result<()> {
     let mut buf = Vec::new();
 
     rdr.read_to_end(&mut buf)?;
@@ -118,20 +189,20 @@ impl MsgHeader {
             message_length: 0,
             request_id: 0,
             response_to: 0,
-            op_code: 0
+            op_code: 0,
         }
     }
 
-    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
-        let message_length  = rdr.read_u32::<LittleEndian>()? as usize;
-        let request_id      = rdr.read_u32::<LittleEndian>()?;
-        let response_to     = rdr.read_u32::<LittleEndian>()?;
-        let op_code         = rdr.read_u32::<LittleEndian>()?;
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+        let message_length  = rdr.read_u32_le().await? as usize;
+        let request_id      = rdr.read_u32_le().await?;
+        let response_to     = rdr.read_u32_le().await?;
+        let op_code         = rdr.read_u32_le().await?;
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
     }
 
     #[allow(dead_code)]
-    pub fn write(&self, mut writer: impl Write) -> io::Result<()> {
+    pub fn write(&self, mut writer: impl Write) -> Result<()> {
         writer.write_u32::<LittleEndian>(self.message_length as u32)?;
         writer.write_u32::<LittleEndian>(self.request_id)?;
         writer.write_u32::<LittleEndian>(self.response_to)?;
@@ -149,13 +220,13 @@ impl fmt::Display for MsgHeader {
 
 // Response objects implement this trait to be handled as server response
 pub trait ResponseDocuments {
-    fn get_documents(&self) -> &Vec<BsonLiteDocument>;
+    fn get_documents(&self) -> &Vec<Document>;
 }
 
 #[derive(Debug)]
 pub struct MsgOpMsg {
     pub flag_bits:          u32,
-    pub documents:          Vec<BsonLiteDocument>,
+    pub documents:          Vec<Document>,
     pub section_bytes:      Vec<Vec<u8>>,
 }
 
@@ -170,79 +241,64 @@ impl fmt::Display for MsgOpMsg {
 }
 
 impl ResponseDocuments for MsgOpMsg {
-    fn get_documents(&self) -> &Vec<BsonLiteDocument> {
+    fn get_documents(&self) -> &Vec<Document> {
         &self.documents
     }
 }
 
 impl MsgOpMsg {
-    pub fn from_reader<R: Read+BufRead>(
-        mut rdr: &mut R,
+    pub async fn from_reader(
+        mut rdr: impl AsyncReadExtPlus,
         trace_msg_body: bool,
-        log_mongo_messages: bool,
-    ) -> io::Result<Self> {
-        let flag_bits = rdr.read_u32::<LittleEndian>()?;
+        _log_mongo_messages: bool,
+    ) -> Result<Self> {
+        let flag_bits = rdr.read_u32_le().await?;
         debug!("flag_bits={:04x}", flag_bits);
 
         let mut documents = Vec::new();
-        let mut section_bytes = Vec::new();
+        let section_bytes = Vec::new();
 
         loop {
-            let kind = match rdr.read_u8() {
+            let kind = match rdr.read_u8().await {
                 Ok(r)   => r,
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                     // This is OK if we've already read at least one doc
+                    // XXX: However, the passed reader must be an adapter
+                    // that has taken just the message length worth of bytes
                     break;
                 },
                 Err(e)  => {
                     warn!("error on read: {}", e);
-                    break;
+                    return Err(e);
                 },
             };
 
-            // We're reading the individual BSON documents into Vec so that we can dump the
-            // contents for debugging.
-
-            let mut buf = Vec::new();
-
-            // This somewhat confusing business with the sections is described at:
+            // This business with the sections is described at:
             // https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#id1
-            if kind != 0 {
-                let section_size = rdr.read_u32::<LittleEndian>()? as usize;
-                let seq_id = read_cstring(&mut rdr)?;
+            // Anyway, we eat the section headers here and leave the reader pointing 
+            // to the beginning of a document.
 
+            if kind != 0 {
+                let section_size = rdr.read_u32_le().await? as usize;
+                let seq_id = read_cstring(&mut rdr).await?;
                 debug!("kind=1: section_size={}, seq_id={}", section_size, seq_id);
 
                 // Section size includes the size of the cstring and the length bytes
-                let bson_size = section_size - seq_id.len() - 1 - 4;
-                rdr.take(bson_size as u64).read_to_end(&mut buf)?;
+                let _bson_size = section_size - seq_id.len() - 1 - 4;
+                // But we're not going to use it but instead just leave it to the 
+                // BSON parser to figure out.
             } else {
-                // Since there may be multiple back to back kind 0 sections we need to
-                // peek at the BSON document length and only consume this many bytes.
-                // At the next round we'll come back to check the kind byte again and
-                // read the rest of it.
-                //
-                rdr.take(4).read_to_end(&mut buf)?;
-                let payload_size = (&buf[..]).read_u32::<LittleEndian>()?;
-                debug!("kind=0: payload_size={}", payload_size);
-                rdr.take(payload_size as u64 - 4).read_to_end(&mut buf)?;
+                debug!("kind=0");
+                // Nothing to do here, reader already at the start of the document
             }
 
-            if log_mongo_messages {
-                if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
-                    info!("{:?} OP_MSG BSON: {}", thread::current().id(), doc);
-                } else {
-                    warn!("{:?} OP_MSG BSON parsing failed", thread::current().id());
-                }
-            }
-
-            match bson_lite::decode_document(&mut &buf[..], &MONGO_BSON_FIELD_SELECTOR) {
+            match MONGO_DOC_PARSER.parse_document(&mut rdr).await {
                 Ok(doc) => {
                     // Take a copy of the raw section bytes so that we can use the
                     // contained BSON document for trace annotations and killing off cursors.
                     if trace_msg_body && (doc.contains_key("comment")
-                            || doc.get_str("op").unwrap_or("") == "killCursors") {
-                        section_bytes.push(buf.clone());
+                        || doc.get_str("op").unwrap_or("") == "killCursors") {
+                        // XXX: We'd want to keep the section_bytes.push(buf.clone());
                     }
 
                     debug!("doc: {}", doc);
@@ -250,9 +306,15 @@ impl MsgOpMsg {
                 },
                 Err(e) => {
                     warn!("BSON decoder error: {:?}", e);
-                    break;
+                    // XXX: Increase a counter and return the error
+                    return Err(e);
                 }
             }
+        }
+
+        if flag_bits & 1 == 1 {
+            // Have checksum, eat it
+            let _checksum = rdr.read_u32().await?;
         }
 
         // Note: there may be checksum following, but we've probably eaten
@@ -264,7 +326,7 @@ impl MsgOpMsg {
     #[allow(dead_code)]
     // An incomplete write function for basic testing. Takes a single section
     // document in the buffer.
-    pub fn write(&self, mut writer: impl Write, doc_buf: &[u8]) -> io::Result<()> {
+    pub fn write(&self, mut writer: impl Write, doc_buf: &[u8]) -> Result<()> {
         writer.write_u32::<LittleEndian>(self.flag_bits)?;
 
         let seq_id = "documents";
@@ -286,7 +348,7 @@ pub struct MsgOpQuery {
     pub full_collection_name: String,
     number_to_skip: i32,
     number_to_return: i32,
-    pub query: BsonLiteDocument,
+    pub query: Document,
     // There's also optional "returnFieldsSelector" but we ignore it
 }
 
@@ -299,21 +361,23 @@ impl fmt::Display for MsgOpQuery {
 }
 
 impl MsgOpQuery {
-    pub fn from_reader(mut rdr: impl BufRead, log_mongo_messages: bool) -> io::Result<Self> {
-        let flags  = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_cstring(&mut rdr)?;
-        let number_to_skip = rdr.read_i32::<LittleEndian>()?;
-        let number_to_return = rdr.read_i32::<LittleEndian>()?;
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus, log_mongo_messages: bool) -> Result<Self> {
+        let flags  = rdr.read_u32_le().await?;
+        let full_collection_name = read_cstring(&mut rdr).await?;
+        let number_to_skip = rdr.read_i32_le().await?;
+        let number_to_return = rdr.read_i32_le().await?;
+
+        // XXX: Again, reading the whole document to memory.
 
         let mut buf = Vec::new();
-        rdr.read_to_end(&mut buf)?;
-        let query = match bson_lite::decode_document(&mut &buf[..], &MONGO_BSON_FIELD_SELECTOR) {
+        rdr.read_to_end(&mut buf).await?;
+        let query = match MONGO_DOC_PARSER.parse_document(&mut &buf[..]).await {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
 
         if log_mongo_messages {
-            if let Ok(doc) = bson::decode_document(&mut &buf[..]) {
+            if let Ok(doc) = bson::Document::from_reader(&mut &buf[..]) {
                 info!("{:?} OP_QUERY BSON: {}", thread::current().id(), doc);
             } else {
                 warn!("{:?} OP_QUERY BSON parsing failed", thread::current().id());
@@ -339,11 +403,11 @@ impl fmt::Display for MsgOpGetMore {
 }
 
 impl MsgOpGetMore {
-    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
-        let _zero = rdr.read_i32::<LittleEndian>()?;
-        let full_collection_name = read_cstring(&mut rdr)?;
-        let number_to_return = rdr.read_i32::<LittleEndian>()?;
-        let cursor_id = rdr.read_i64::<LittleEndian>()?;
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+        let _zero = rdr.read_i32_le().await?;
+        let full_collection_name = read_cstring(&mut rdr).await?;
+        let number_to_return = rdr.read_i32_le().await?;
+        let cursor_id = rdr.read_i64_le().await?;
 
         Ok(MsgOpGetMore{full_collection_name, number_to_return, cursor_id})
     }
@@ -353,8 +417,8 @@ impl MsgOpGetMore {
 pub struct MsgOpUpdate {
     pub full_collection_name: String,
     flags: u32,
-    selector: BsonLiteDocument,
-    update: BsonLiteDocument,
+    selector: Document,
+    update: Document,
 }
 
 impl fmt::Display for MsgOpUpdate {
@@ -365,15 +429,15 @@ impl fmt::Display for MsgOpUpdate {
 }
 
 impl MsgOpUpdate {
-    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
-        let _zero = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_cstring(&mut rdr)?;
-        let flags = rdr.read_u32::<LittleEndian>()?;
-        let selector = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+        let _zero = rdr.read_u32_le().await?;
+        let full_collection_name = read_cstring(&mut rdr).await?;
+        let flags = rdr.read_u32_le().await?;
+        let selector = match MONGO_DOC_PARSER.parse_document(&mut rdr).await {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
-        let update = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
+        let update = match MONGO_DOC_PARSER.parse_document(&mut rdr).await {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
@@ -385,7 +449,7 @@ impl MsgOpUpdate {
 pub struct MsgOpDelete {
     pub full_collection_name: String,
     flags: u32,
-    selector: BsonLiteDocument,
+    selector: Document,
 }
 
 impl fmt::Display for MsgOpDelete {
@@ -396,11 +460,11 @@ impl fmt::Display for MsgOpDelete {
 }
 
 impl MsgOpDelete {
-    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
-        let _zero = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_cstring(&mut rdr)?;
-        let flags = rdr.read_u32::<LittleEndian>()?;
-        let selector = match bson_lite::decode_document(&mut rdr, &MONGO_BSON_FIELD_SELECTOR) {
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+        let _zero = rdr.read_u32_le().await?;
+        let full_collection_name = read_cstring(&mut rdr).await?;
+        let flags = rdr.read_u32_le().await?;
+        let selector = match MONGO_DOC_PARSER.parse_document(&mut rdr).await {
             Ok(doc) => doc,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         };
@@ -422,9 +486,9 @@ impl fmt::Display for MsgOpInsert {
 }
 
 impl MsgOpInsert {
-    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
-        let flags = rdr.read_u32::<LittleEndian>()?;
-        let full_collection_name = read_cstring(&mut rdr)?;
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+        let flags = rdr.read_u32_le().await?;
+        let full_collection_name = read_cstring(&mut rdr).await?;
         // Ignore the documents, we don't need anything from there
         Ok(MsgOpInsert{flags, full_collection_name})
     }
@@ -436,7 +500,7 @@ pub struct MsgOpReply {
     cursor_id:              u64,
     starting_from:          u32,
     pub number_returned:    u32,
-    pub documents:          Vec<BsonLiteDocument>,
+    pub documents:          Vec<Document>,
 }
 
 impl fmt::Display for MsgOpReply {
@@ -451,30 +515,32 @@ impl fmt::Display for MsgOpReply {
 }
 
 impl ResponseDocuments for MsgOpReply {
-    fn get_documents(&self) -> &Vec<BsonLiteDocument> {
+    fn get_documents(&self) -> &Vec<Document> {
         &self.documents
     }
 }
 
 impl MsgOpReply {
-    pub fn from_reader(mut rdr: impl BufRead, log_mongo_messages: bool) -> io::Result<Self> {
-        let flags  = rdr.read_u32::<LittleEndian>()?;
-        let cursor_id = rdr.read_u64::<LittleEndian>()?;
-        let starting_from = rdr.read_u32::<LittleEndian>()?;
-        let number_returned = rdr.read_u32::<LittleEndian>()?;
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus, log_mongo_messages: bool) -> Result<Self> {
+        let flags  = rdr.read_u32_le().await?;
+        let cursor_id = rdr.read_u64_le().await?;
+        let starting_from = rdr.read_u32_le().await?;
+        let number_returned = rdr.read_u32_le().await?;
         let mut documents = Vec::new();
 
+        // XXX: Reading the whole buffer here
+        //
         let mut buf = Vec::new();
-        rdr.read_to_end(&mut buf)?;
+        rdr.read_to_end(&mut buf).await?;
 
         let mut c = Cursor::new(&buf);
-        while let Ok(doc) = bson_lite::decode_document(&mut c, &MONGO_BSON_FIELD_SELECTOR) {
+        while let Ok(doc) = MONGO_DOC_PARSER.parse_document(&mut c).await {
             documents.push(doc);
         }
 
         if log_mongo_messages {
             let mut c = Cursor::new(&buf);
-            while let Ok(doc) = bson::decode_document(&mut c) {
+            while let Ok(doc) = bson::Document::from_reader(&mut c) {
                 info!("{:?} OP_REPLY BSON: {}", thread::current().id(), doc);
             }
         }
@@ -498,10 +564,10 @@ impl fmt::Display for MsgOpCompressed {
 }
 
 impl MsgOpCompressed {
-    pub fn from_reader(mut rdr: impl BufRead) -> io::Result<Self> {
-        let original_op = rdr.read_i32::<LittleEndian>()?;
-        let uncompressed_size = rdr.read_i32::<LittleEndian>()?;
-        let compressor_id = rdr.read_u8()?;
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+        let original_op = rdr.read_i32_le().await?;
+        let uncompressed_size = rdr.read_i32_le().await?;
+        let compressor_id = rdr.read_u8().await?;
         // Ignore the compressed message, we are not going to use it
         Ok(MsgOpCompressed{original_op, uncompressed_size, compressor_id})
     }

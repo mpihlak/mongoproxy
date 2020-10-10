@@ -7,6 +7,9 @@ use std::{thread, str};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener,TcpStream};
 use tokio::net::tcp::{OwnedReadHalf,OwnedWriteHalf};
+use tokio::sync::mpsc;
+
+use bytes::Buf;
 
 use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
@@ -21,6 +24,8 @@ use mongoproxy::dstaddr;
 use mongoproxy::appconfig::{AppConfig};
 use mongoproxy::mongodb::tracker::{MongoStatsTracker};
 
+
+type BufBytes = Result<bytes::Bytes, std::io::Error>;
 
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
 const ADMIN_PORT: &str = "9898";
@@ -224,21 +229,18 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let (mut read_client, mut write_client) = client_stream.into_split();
     let (mut read_server, mut write_server) = server_stream.into_split();
 
+    let (client_tx, client_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
+    let (server_tx, server_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
+
     // Read from client, write to server
     let client_task = async {
-        proxy_bytes_with(&mut read_client, &mut write_server, |buf| {
-            let mut tracker = client_tracker.lock().unwrap();
-            tracker.track_client_request(buf);
-        }).await?;
+        proxy_bytes(&mut read_client, &mut write_server, client_tx).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
     };
 
     // Read from server, write to client
     let server_task = async {
-        proxy_bytes_with(&mut read_server, &mut write_client, |buf| {
-            let mut tracker = server_tracker.lock().unwrap();
-            tracker.track_server_response(buf);
-        }).await?;
+        proxy_bytes(&mut read_server, &mut write_client, server_tx).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
     };
 
@@ -250,12 +252,11 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
 }
 
 // Move bytes between sockets, calling the provided tracker function
-async fn proxy_bytes_with<F>(
+async fn proxy_bytes(
     read_from: &mut OwnedReadHalf,
     write_to: &mut OwnedWriteHalf,
-    mut tracker: F
+    mut tracker_channel: mpsc::Sender<BufBytes>,
 ) -> Result<(), Box<dyn Error+Sync+Send>>
-    where F: FnMut(&[u8])
 {
     loop {
         let mut buf = [0; 1024];
@@ -265,7 +266,7 @@ async fn proxy_bytes_with<F>(
             // Handle request tracking before writing any data to reduce
             // the chances of server response arriving before the client
             // request has been tracked.
-            tracker(&buf[..len]);
+            tracker_channel.send(Ok(bytes::Bytes::copy_from_slice(&buf))).await?;
             write_to.write_all(&buf[0..len]).await?;
         } else {
             // EOF on read, return Err to signal try_join! to return
@@ -286,7 +287,7 @@ fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
 fn format_client_address(sockaddr: &SocketAddr) -> String {
     let mut addr_str = sockaddr.to_string();
     if let Some(pos) = addr_str.find(':') {
-        addr_str.split_off(pos);
+        let _ = addr_str.split_off(pos);
     }
     addr_str
 }
