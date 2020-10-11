@@ -286,18 +286,11 @@ async fn proxy_bytes(
 {
     let mut tracker_ok = true;
 
-    use mongoproxy::mongodb::debug_print;
-
     loop {
         let mut buf = [0; 1024];
         let len = read_from.read(&mut buf).await?;
 
         if len > 0 {
-            println!("got bytes:");
-            // XXX
-            let _ = debug_print(&buf[..len]);
-            println!();
-
             write_to.write_all(&buf[0..len]).await?;
 
             if tracker_ok {
