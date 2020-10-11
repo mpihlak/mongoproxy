@@ -1,13 +1,11 @@
 use std::fmt;
-use std::{thread};
-use log::{warn,info,debug};
+use log::{warn,debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec};
 
-use std::io::{Read, Write, Cursor, Error, ErrorKind};
+use std::io::{Read, Write, Error, ErrorKind};
 use tokio::io::{self, AsyncReadExt, Result};
-use bson;
 
 
 pub const HEADER_LENGTH: usize = 16;
@@ -63,7 +61,6 @@ lazy_static! {
 
 }
 
-
 #[derive(Debug)]
 pub enum OpCode{
     OpReply = 1,
@@ -115,20 +112,20 @@ impl MongoMessage {
             return Err(Error::new(ErrorKind::Other, "Invalid MongoDb header"));
         }
 
-        // Take only as much as promised in the header
+        // Take only as much as promised in the header.
         let mut rdr = rdr.take((hdr.message_length - HEADER_LENGTH) as u64);
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
         let msg = match hdr.op_code {
-               1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr, false).await?),
-            2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr, false).await?),
+               1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr).await?),
+            2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr).await?),
             2005 => MongoMessage::GetMore(MsgOpGetMore::from_reader(&mut rdr).await?),
             2001 => MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr).await?),
             2006 => MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr).await?),
             2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr).await?),
             2012 => MongoMessage::Compressed(MsgOpCompressed::from_reader(&mut rdr).await?),
-            2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr, false, false).await?),
+            2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr).await?),
             2010 | 2011 => {
                 // This is an undocumented legacy protocol that some clients (bad Robo3T)
                 // still use. We ignore it.
@@ -141,35 +138,11 @@ impl MongoMessage {
             },
         };
 
+        // Sink the rest of the bytes in case there are leftovers.
+        io::copy(&mut rdr, &mut tokio::io::sink()).await?;
+
         Ok((hdr, msg))
     }
-}
-
-#[allow(dead_code)]
-pub fn debug_print(mut rdr: impl Read) -> Result<()> {
-    let mut buf = Vec::new();
-
-    rdr.read_to_end(&mut buf)?;
-
-    let mut hex_str = String::new();
-    let mut txt_str = String::new();
-    let mut offset = 0;
-    for (i, b) in buf.iter().enumerate() {
-        hex_str.push_str(&format!("{:02x} ", b));
-        txt_str.push(if *b < 32 || *b > 127 { '.' } else { *b as char });
-        if (i + 1) % 16 == 0 {
-            println!("{:08x}: {}{}", offset, hex_str, txt_str);
-            offset += 16;
-            hex_str.clear();
-            txt_str.clear();
-        }
-    }
-    if !hex_str.is_empty() {
-        let padding = " ".repeat(48 - hex_str.len());
-        println!("{:08x}: {}{}{}", offset, hex_str, padding, txt_str);
-    }
-
-    Ok(())
 }
 
 #[derive(Debug,Clone,Default)]
@@ -244,11 +217,8 @@ impl ResponseDocuments for MsgOpMsg {
 }
 
 impl MsgOpMsg {
-    pub async fn from_reader(
-        mut rdr: impl AsyncReadExtPlus,
-        trace_msg_body: bool,
-        _log_mongo_messages: bool,
-    ) -> Result<Self> {
+
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
         let flag_bits = rdr.read_u32_le().await?;
         debug!("flag_bits={:04x}", flag_bits);
 
@@ -275,9 +245,8 @@ impl MsgOpMsg {
 
             // This business with the sections is described at:
             // https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#id1
-            // Anyway, we eat the section headers here and leave the reader pointing
+            // Anyway, we just eat the section headers here and leave the reader pointing
             // to the beginning of a document.
-            //
 
             if kind != 0 {
                 let section_size = rdr.read_u32_le().await? as usize;
@@ -293,24 +262,9 @@ impl MsgOpMsg {
                 // Nothing to do here, reader already at the start of the document
             }
 
-            match MONGO_DOC_PARSER.parse_document(&mut rdr).await {
-                Ok(doc) => {
-                    // Take a copy of the raw section bytes so that we can use the
-                    // contained BSON document for trace annotations and killing off cursors.
-                    if trace_msg_body && (doc.contains_key("comment")
-                        || doc.get_str("op").unwrap_or("") == "killCursors") {
-                        // XXX: We'd want to keep the section_bytes.push(buf.clone());
-                    }
-
-                    debug!("doc: {}", doc);
-                    documents.push(doc);
-                },
-                Err(e) => {
-                    warn!("BSON decoder error: {:?}", e);
-                    // XXX: Increase a counter and return the error
-                    return Err(e);
-                }
-            }
+            let doc = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+            debug!("doc: {}", doc);
+            documents.push(doc);
         }
 
         if flag_bits & 1 == 1 {
@@ -359,28 +313,13 @@ impl fmt::Display for MsgOpQuery {
 }
 
 impl MsgOpQuery {
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus, log_mongo_messages: bool) -> Result<Self> {
+
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
         let flags  = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
         let number_to_skip = rdr.read_i32_le().await?;
         let number_to_return = rdr.read_i32_le().await?;
-
-        // XXX: Again, reading the whole document to memory.
-
-        let mut buf = Vec::new();
-        rdr.read_to_end(&mut buf).await?;
-        let query = match MONGO_DOC_PARSER.parse_document(&mut &buf[..]).await {
-            Ok(doc) => doc,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-        };
-
-        if log_mongo_messages {
-            if let Ok(doc) = bson::Document::from_reader(&mut &buf[..]) {
-                info!("{:?} OP_QUERY BSON: {}", thread::current().id(), doc);
-            } else {
-                warn!("{:?} OP_QUERY BSON parsing failed", thread::current().id());
-            }
-        }
+        let query = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
 
         Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return, query})
     }
@@ -401,6 +340,7 @@ impl fmt::Display for MsgOpGetMore {
 }
 
 impl MsgOpGetMore {
+
     pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
         let _zero = rdr.read_i32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
@@ -427,18 +367,14 @@ impl fmt::Display for MsgOpUpdate {
 }
 
 impl MsgOpUpdate {
+
     pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
         let _zero = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
         let flags = rdr.read_u32_le().await?;
-        let selector = match MONGO_DOC_PARSER.parse_document(&mut rdr).await {
-            Ok(doc) => doc,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-        };
-        let update = match MONGO_DOC_PARSER.parse_document(&mut rdr).await {
-            Ok(doc) => doc,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-        };
+        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+        let update = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+
         Ok(MsgOpUpdate{flags, full_collection_name, selector, update})
     }
 }
@@ -458,14 +394,13 @@ impl fmt::Display for MsgOpDelete {
 }
 
 impl MsgOpDelete {
+
     pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
         let _zero = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
         let flags = rdr.read_u32_le().await?;
-        let selector = match MONGO_DOC_PARSER.parse_document(&mut rdr).await {
-            Ok(doc) => doc,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-        };
+        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+
         Ok(MsgOpDelete{flags, full_collection_name, selector})
     }
 }
@@ -487,7 +422,9 @@ impl MsgOpInsert {
     pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
         let flags = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
-        // Ignore the documents, we don't need anything from there
+
+        // There's also a list of documents in the message, but we ignore it.
+
         Ok(MsgOpInsert{flags, full_collection_name})
     }
 }
@@ -519,28 +456,16 @@ impl ResponseDocuments for MsgOpReply {
 }
 
 impl MsgOpReply {
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus, log_mongo_messages: bool) -> Result<Self> {
+
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
         let flags  = rdr.read_u32_le().await?;
         let cursor_id = rdr.read_u64_le().await?;
         let starting_from = rdr.read_u32_le().await?;
         let number_returned = rdr.read_u32_le().await?;
         let mut documents = Vec::new();
 
-        // XXX: Reading the whole buffer here
-        //
-        let mut buf = Vec::new();
-        rdr.read_to_end(&mut buf).await?;
-
-        let mut c = Cursor::new(&buf);
-        while let Ok(doc) = MONGO_DOC_PARSER.parse_document(&mut c).await {
+        while let Ok(doc) = MONGO_DOC_PARSER.parse_document(&mut rdr).await {
             documents.push(doc);
-        }
-
-        if log_mongo_messages {
-            let mut c = Cursor::new(&buf);
-            while let Ok(doc) = bson::Document::from_reader(&mut c) {
-                info!("{:?} OP_REPLY BSON: {}", thread::current().id(), doc);
-            }
         }
 
         Ok(MsgOpReply{flags, cursor_id, starting_from, number_returned, documents})
@@ -562,11 +487,42 @@ impl fmt::Display for MsgOpCompressed {
 }
 
 impl MsgOpCompressed {
+
     pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
         let original_op = rdr.read_i32_le().await?;
         let uncompressed_size = rdr.read_i32_le().await?;
         let compressor_id = rdr.read_u8().await?;
-        // Ignore the compressed message, we are not going to use it
+
+        // Ignore the actual compressed message, we are not going to use it
+
         Ok(MsgOpCompressed{original_op, uncompressed_size, compressor_id})
     }
 }
+
+// Debugging helper to print out xxd compatible byte dumps.
+pub fn debug_print(mut rdr: impl Read) -> Result<()> {
+    let mut buf = Vec::new();
+
+    rdr.read_to_end(&mut buf)?;
+
+    let mut hex_str = String::new();
+    let mut txt_str = String::new();
+    let mut offset = 0;
+    for (i, b) in buf.iter().enumerate() {
+        hex_str.push_str(&format!("{:02x} ", b));
+        txt_str.push(if *b < 32 || *b > 127 { '.' } else { *b as char });
+        if (i + 1) % 16 == 0 {
+            println!("{:08x}: {}{}", offset, hex_str, txt_str);
+            offset += 16;
+            hex_str.clear();
+            txt_str.clear();
+        }
+    }
+    if !hex_str.is_empty() {
+        let padding = " ".repeat(48 - hex_str.len());
+        println!("{:08x}: {}{}{}", offset, hex_str, padding, txt_str);
+    }
+
+    Ok(())
+}
+
