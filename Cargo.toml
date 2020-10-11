@@ -7,13 +7,6 @@ edition = "2018"
 [profile.release]
 debug = true
 
-[[bench]]
-name = "tracker_benchmark"
-harness = false
-
-[dev-dependencies]
-criterion = "0.3"
-
 [dependencies]
 byteorder = '1.3'
 log = '0.4'
@@ -24,7 +17,7 @@ lazy_static = '1.4'
 clap = '2.33'
 crossbeam-channel = '0.3'
 rustracing = '0.2'
-rustracing_jaeger = '0.2'
+rustracing_jaeger = '0.5'
 libc = '0.2'
 bson = '1.1'
 tokio = { version = "0.2.22", features = ["rt-threaded", "net", "tcp", "macros", "io-util", "sync", "stream" ] }
