@@ -651,4 +651,15 @@ mod tests {
         assert_eq!(123, msg.flags);
         assert_eq!("a", msg.selector.get_str("op").unwrap());
     }
+
+    #[tokio::test]
+    async fn test_parse_op_insert() {
+        let mut buf = Vec::new();
+        buf.write_i32::<LittleEndian>(123).unwrap();    // flags
+        buf.write(b"tribbles\0").unwrap();              // collection name
+
+        let msg = MsgOpInsert::from_reader(&buf[..]).await.unwrap();
+        assert_eq!(123, msg.flags);
+        assert_eq!("tribbles", msg.full_collection_name);
+    }
 }
