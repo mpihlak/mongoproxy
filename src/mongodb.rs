@@ -585,4 +585,23 @@ mod tests {
         assert_eq!("y", msg.documents[1].get_str("op").unwrap());
         assert_eq!("z", msg.documents[2].get_str("op").unwrap());
     }
+
+    #[tokio::test]
+    async fn test_parse_op_query() {
+        let mut buf = Vec::new();
+        buf.write_i32::<LittleEndian>(0i32).unwrap();   // flag bits
+        buf.write(b"tribbles\0").unwrap();
+        buf.write_i32::<LittleEndian>(9i32).unwrap();           // num to skip
+        buf.write_i32::<LittleEndian>(6i32).unwrap();           // num to return
+        let doc = doc! { "a": 1, "q": { "$comment": "ok" } };   // query text
+        doc.to_writer(&mut buf).unwrap();
+
+        let msg = MsgOpQuery::from_reader(&buf[..]).await.unwrap();
+        assert_eq!(0, msg.flags);
+        assert_eq!("tribbles", msg.full_collection_name);
+        assert_eq!(9, msg.number_to_skip);
+        assert_eq!(6, msg.number_to_return);
+        assert_eq!("a", msg.query.get_str("op").unwrap());
+        assert_eq!("ok", msg.query.get_str("comment").unwrap());
+    }
 }
