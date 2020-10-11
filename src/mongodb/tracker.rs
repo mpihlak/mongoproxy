@@ -416,6 +416,10 @@ impl MongoStatsTracker{
             // If the client_request had a span, it will be automatically sent down the
             // channel as it goes out of scope here.
         } else {
+            // XXX: Because the processing is asynchronous we might receive a server response
+            // before the client request. Instead of dropping the response we could store it and
+            // process when the matching client request arrives. Timing the requests will be funny
+            // though.
             RESPONSE_TO_REQUEST_MISMATCH.inc();
             warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);
         }
