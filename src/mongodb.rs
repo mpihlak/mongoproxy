@@ -561,7 +561,7 @@ mod tests {
         buf.write_u8(0).unwrap();
         let doc = doc! { "x": "foo" };
         doc.to_writer(&mut buf).unwrap();
-    
+ 
         // Section 1 - first document
         buf.write_u8(1).unwrap();                       // section type=1
         buf.write_i32::<LittleEndian>(1234).unwrap();   // section size (ignored in parser)
@@ -661,5 +661,26 @@ mod tests {
         let msg = MsgOpInsert::from_reader(&buf[..]).await.unwrap();
         assert_eq!(123, msg.flags);
         assert_eq!("tribbles", msg.full_collection_name);
+    }
+
+    #[tokio::test]
+    async fn test_parse_op_reply() {
+        let mut buf = Vec::new();
+        buf.write_i32::<LittleEndian>(123).unwrap();    // flags
+        buf.write_i64::<LittleEndian>(123456).unwrap(); // cursor id
+        buf.write_i32::<LittleEndian>(555).unwrap();    // starting from
+        buf.write_i32::<LittleEndian>(666).unwrap();    // number returned
+
+        for (i, v) in vec!["a", "b", "c"].iter().enumerate() {
+            let doc = doc! { v.to_string(): i as i32 };
+            doc.to_writer(&mut buf).unwrap();
+        }
+
+        let msg = MsgOpReply::from_reader(&buf[..]).await.unwrap();
+        assert_eq!(123, msg.flags);
+        assert_eq!(123456, msg.cursor_id);
+        assert_eq!(555, msg.starting_from);
+        assert_eq!(666, msg.number_returned);
+        assert_eq!(3, msg.documents.len());
     }
 }
