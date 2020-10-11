@@ -3,7 +3,7 @@ use std::{thread};
 use log::{warn,info,debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
-use prometheus::{CounterVec,Histogram};
+use prometheus::{CounterVec};
 
 use std::io::{Read, Write, Cursor, Error, ErrorKind};
 use tokio::io::{self, AsyncReadExt, Result};
@@ -39,7 +39,7 @@ lazy_static! {
             .match_array_len("/cursor/nextBatch", "docs_returned")
             .match_exact("/n", "n")
             // findAndModify returns number of collection in lastErrorObject/n
-            .match_exact("/lastErrorObject/n", "n")                    
+            .match_exact("/lastErrorObject/n", "n")
             .match_exact("/nModified", "n_modified");
 
     static ref OPCODE_COUNTER: CounterVec =
@@ -54,23 +54,13 @@ lazy_static! {
             "Number of unrecognized opcodes in MongoDb header",
             &["op"]).unwrap();
 
-    static ref HEADER_PARSE_ERRORS_COUNTER: CounterVec =
-        register_counter_vec!(
-            "mongoproxy_header_parse_error_count_total",
-            "Header parse errors",
-            &["error"]).unwrap();
-
+    // XXX: We should actually capture parse errors
     static ref MESSAGE_PARSE_ERRORS_COUNTER: CounterVec =
         register_counter_vec!(
             "mongoproxy_message_parse_error_count_total",
             "Message body parse errors",
             &["error"]).unwrap();
 
-    static ref PARSER_BUFFER_SIZE: Histogram =
-        register_histogram!(
-            "mongoproxy_parser_buf_size",
-            "Parser buffer size distribution",
-            vec![1000.0, 10000.0, 100_000.0, 1_000_000.0, 10_000_000.0]).unwrap();
 }
 
 
@@ -130,8 +120,6 @@ impl MongoMessage {
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
-        // XXX: log_mongo_messages and trace_msg_body are not supported.
-
         let msg = match hdr.op_code {
                1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr, false).await?),
             2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr, false).await?),
@@ -165,17 +153,20 @@ pub fn debug_print(mut rdr: impl Read) -> Result<()> {
 
     let mut hex_str = String::new();
     let mut txt_str = String::new();
+    let mut offset = 0;
     for (i, b) in buf.iter().enumerate() {
         hex_str.push_str(&format!("{:02x} ", b));
         txt_str.push(if *b < 32 || *b > 127 { '.' } else { *b as char });
         if (i + 1) % 16 == 0 {
-            println!("{}{}", hex_str, txt_str);
+            println!("{:08x}: {}{}", offset, hex_str, txt_str);
+            offset += 16;
             hex_str.clear();
             txt_str.clear();
         }
     }
     if !hex_str.is_empty() {
-        println!("{}{}", hex_str, txt_str);
+        let padding = " ".repeat(48 - hex_str.len());
+        println!("{:08x}: {}{}{}", offset, hex_str, padding, txt_str);
     }
 
     Ok(())
@@ -268,7 +259,12 @@ impl MsgOpMsg {
             let kind = match rdr.read_u8().await {
                 Ok(r)   => r,
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                    // This is OK if we've already read at least one doc
+                    // This is OK if we've already read at least one doc. In fact
+                    // we're relying on reaching an EOF here to determine when to
+                    // stop parsing.
+                    if documents.len() == 0 {
+                        return Err(Error::new(ErrorKind::Other, "EOF reached, but no sections were read"));
+                    }
                     break;
                 },
                 Err(e)  => {
@@ -279,8 +275,9 @@ impl MsgOpMsg {
 
             // This business with the sections is described at:
             // https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#id1
-            // Anyway, we eat the section headers here and leave the reader pointing 
+            // Anyway, we eat the section headers here and leave the reader pointing
             // to the beginning of a document.
+            //
 
             if kind != 0 {
                 let section_size = rdr.read_u32_le().await? as usize;
@@ -289,7 +286,7 @@ impl MsgOpMsg {
 
                 // Section size includes the size of the cstring and the length bytes
                 let _bson_size = section_size - seq_id.len() - 1 - 4;
-                // But we're not going to use it but instead just leave it to the 
+                // But we're not going to use it but instead just leave it to the
                 // BSON parser to figure out.
             } else {
                 debug!("kind=0");
@@ -320,9 +317,6 @@ impl MsgOpMsg {
             // Have checksum, eat it
             let _checksum = rdr.read_u32().await?;
         }
-
-        // Note: there may be checksum following, but we've probably eaten
-        // it's bytes while trying to decode the section list.
 
         Ok(MsgOpMsg{flag_bits, documents, section_bytes})
     }
