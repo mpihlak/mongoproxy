@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(hdr.op_code, parsed_hdr.op_code);
     }
 
-    fn msgop_to_buf(doc_id: i32, mut buf: impl Write) {
+    fn msgop_to_buf(doc_id: u32, mut buf: impl Write) {
         buf.write_i32::<LittleEndian>(0i32).unwrap();   // flag bits
 
         // Section 0
@@ -688,7 +688,42 @@ mod tests {
         assert_eq!(3, msg.documents.len());
     }
 
+    // Test parsing multiple back to back messages
     #[tokio::test]
-    async fn test_parse_mongodb_message() {
+    async fn test_parse_multiple_message() {
+        let mut buf = Vec::new();
+
+        for i in 0..3u32 {
+            let mut msg_buf = Vec::new();
+            msgop_to_buf(i, &mut msg_buf);
+
+            let hdr = MsgHeader {
+                message_length: HEADER_LENGTH + msg_buf.len(),
+                request_id: i+1,
+                response_to: i,
+                op_code: 2013,
+            };
+
+            hdr.write(&mut buf);
+            buf.extend(&msg_buf);
+        }
+
+        let mut cur = std::io::Cursor::new(buf);
+        let mut messages = Vec::new();
+        while let Ok((_, msg)) = MongoMessage::from_reader(&mut cur).await {
+            messages.push(msg);
+        }
+
+        assert_eq!(3, messages.len());
+        for (i, msg) in messages.iter().enumerate() {
+            match msg {
+                MongoMessage::Msg(op_msg) => {
+                    assert_eq!(format!("x{}", i), op_msg.documents[0].get_str("op").unwrap());
+                },
+                _ => {
+                    panic!("expecting MsgOpMsg");
+                },
+            }
+        }
     }
 }
