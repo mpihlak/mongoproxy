@@ -254,8 +254,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
         Ok::<(), io::Error>(())
     });
 
-    // Now start proxying bytes between the client and the server. Forking
-    // off a stream of bytes to the trackers.
+    // Now start proxying bytes between the client and the server.
 
     let (mut read_client, mut write_client) = client_stream.into_split();
     let (mut read_server, mut write_server) = server_stream.into_split();
@@ -287,14 +286,20 @@ async fn proxy_bytes(
 {
     let mut tracker_ok = true;
 
+    use mongoproxy::mongodb::messages::debug_print;
+
     loop {
         let mut buf = [0; 1024];
         let len = read_from.read(&mut buf).await?;
 
         if len > 0 {
-            // Handle request tracking before writing any data to reduce
-            // the chances of server response arriving before the client
-            // request has been tracked.
+            println!("got bytes:");
+            // XXX
+            let _ = debug_print(&buf[..len]);
+            println!();
+
+            write_to.write_all(&buf[0..len]).await?;
+
             if tracker_ok {
                 if let Err(e) = tracker_channel.send(Ok(bytes::Bytes::copy_from_slice(&buf[..len]))).await {
                     error!("{:?} error sending to tracker: {}", thread::current().id(), e);
@@ -302,7 +307,6 @@ async fn proxy_bytes(
                     tracker_ok = false;
                 }
             }
-            write_to.write_all(&buf[0..len]).await?;
         } else {
             // EOF on read, return Err to signal try_join! to return
             return Err("EOF".into());
