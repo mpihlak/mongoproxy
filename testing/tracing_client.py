@@ -30,7 +30,7 @@ if __name__ == "__main__":
     def span_as_text(span):
         text_map = {}
         tracer.inject(span_context=span, format=Format.TEXT_MAP, carrier=text_map)
-        return ''.join(["%s:%s" % (k,v) for k, v in text_map.iteritems()])
+        return ''.join(["%s:%s" % (k,v) for k, v in text_map.items()])
 
     coll = con['test']['kittens']
 
