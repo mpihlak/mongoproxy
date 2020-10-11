@@ -118,7 +118,7 @@ impl fmt::Display for MongoMessage {
 }
 
 impl MongoMessage {
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<(MsgHeader, MongoMessage)> {
         let hdr = MsgHeader::from_reader(&mut rdr).await?;
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
@@ -147,7 +147,7 @@ impl MongoMessage {
             },
         };
 
-        Ok(msg)
+        Ok((hdr, msg))
     }
 }
 

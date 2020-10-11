@@ -4,12 +4,10 @@ use std::io::{self};
 use std::error::{Error};
 use std::{thread, str};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, stream_reader};
 use tokio::net::{TcpListener,TcpStream};
 use tokio::net::tcp::{OwnedReadHalf,OwnedWriteHalf};
 use tokio::sync::mpsc;
-
-use bytes::Buf;
 
 use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
@@ -23,6 +21,7 @@ use mongoproxy::tracing;
 use mongoproxy::dstaddr;
 use mongoproxy::appconfig::{AppConfig};
 use mongoproxy::mongodb::tracker::{MongoStatsTracker};
+use mongoproxy::mongodb::messages::{MsgHeader, MongoMessage};
 
 
 type BufBytes = Result<bytes::Bytes, std::io::Error>;
@@ -203,6 +202,11 @@ async fn run_accept_loop(local_addr: String, remote_addr: String, app: &AppConfi
 // Open a connection to the server and start passing bytes between the client and the server. Also
 // split the traffic to MongoDb protocol parser, so that we can get some stats out of this.
 //
+// The philosophy here is that we will not change any of the bytes that are passed between the
+// client and the server. Instead we fork off a stream and send it to a separate tracker task,
+// which then parses the messages and collects metrics from it. Should the tracker fail, the
+// proxy still remains operational.
+//
 async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: AppConfig)
     -> Result<(), Box<dyn Error>>
 {
@@ -226,19 +230,40 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     client_stream.set_nodelay(true)?;
     server_stream.set_nodelay(true)?;
 
-    let (mut read_client, mut write_client) = client_stream.into_split();
-    let (mut read_server, mut write_server) = server_stream.into_split();
+    // Start the trackers to parse and track MongoDb messages from the input stream. This works by
+    // having the proxy tasks send a copy of the bytes over a channel and process that channel
+    // as a stream of bytes, extracting MongoDb messages and tracking the metrics from there.
 
     let (client_tx, client_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
     let (server_tx, server_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
 
-    // Read from client, write to server
+    tokio::spawn(async move {
+        track_messages(client_rx, move |hdr, msg| {
+            let mut tracker = client_tracker.lock().unwrap();
+            tracker.track_client_request(&hdr, &msg);
+        }).await?;
+        Ok::<(), io::Error>(())
+    });
+
+    tokio::spawn(async move {
+        track_messages(server_rx, move |hdr, msg| {
+            let mut tracker = server_tracker.lock().unwrap();
+            tracker.track_server_response(&hdr, &msg);
+        }).await?;
+        Ok::<(), io::Error>(())
+    });
+
+    // Now start proxying bytes between the client and the server. Forking
+    // off a stream of bytes to the trackers.
+
+    let (mut read_client, mut write_client) = client_stream.into_split();
+    let (mut read_server, mut write_server) = server_stream.into_split();
+
     let client_task = async {
         proxy_bytes(&mut read_client, &mut write_server, client_tx).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
     };
 
-    // Read from server, write to client
     let server_task = async {
         proxy_bytes(&mut read_server, &mut write_client, server_tx).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
@@ -251,13 +276,16 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     }
 }
 
-// Move bytes between sockets, calling the provided tracker function
+// Move bytes between sockets, forking the byte stream into a mpsc channel
+// for processing.
 async fn proxy_bytes(
     read_from: &mut OwnedReadHalf,
     write_to: &mut OwnedWriteHalf,
     mut tracker_channel: mpsc::Sender<BufBytes>,
 ) -> Result<(), Box<dyn Error+Sync+Send>>
 {
+    let mut tracker_ok = true;
+
     loop {
         let mut buf = [0; 1024];
         let len = read_from.read(&mut buf).await?;
@@ -266,11 +294,43 @@ async fn proxy_bytes(
             // Handle request tracking before writing any data to reduce
             // the chances of server response arriving before the client
             // request has been tracked.
-            tracker_channel.send(Ok(bytes::Bytes::copy_from_slice(&buf))).await?;
+            if tracker_ok {
+                if let Err(e) = tracker_channel.send(Ok(bytes::Bytes::copy_from_slice(&buf))).await {
+                    error!("{:?} error sending to tracker: {}", thread::current().id(), e);
+                    tracker_ok = false;
+                }
+            }
             write_to.write_all(&buf[0..len]).await?;
         } else {
             // EOF on read, return Err to signal try_join! to return
             return Err("EOF".into());
+        }
+    }
+}
+
+// Process the mpsc channel as a byte stream, parsing MongoDb messages
+// and sending them off to a tracker.
+async fn track_messages<F>(
+    rx: mpsc::Receiver<BufBytes>,
+    mut tracker_fn: F
+) -> Result<(), std::io::Error>
+    where F: FnMut(&MsgHeader, &MongoMessage)
+{
+    let mut s = stream_reader(rx);
+    loop {
+        match MongoMessage::from_reader(&mut s).await {
+            Ok((hdr, msg)) => {
+                tracker_fn(&hdr, &msg);
+            },
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                warn!("{:?} EOF in tracking messages: {}", thread::current().id(), e);
+                return Ok(());
+            },
+            Err(e) => {
+                // XXX: Could just be an EOF
+                error!("{:?} error parsing mongodb message: {}", thread::current().id(), e);
+                return Err(e);
+            }
         }
     }
 }

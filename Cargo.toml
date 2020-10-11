@@ -27,6 +27,6 @@ rustracing = '0.2'
 rustracing_jaeger = '0.2'
 libc = '0.2'
 bson = '1.1'
-tokio = { version = "0.2.22", features = ["rt-threaded", "net", "tcp", "macros", "io-util", "sync"] }
+tokio = { version = "0.2.22", features = ["rt-threaded", "net", "tcp", "macros", "io-util", "sync", "stream" ] }
 async-bson = { path = "async-bson" }
 bytes = '0.5'
