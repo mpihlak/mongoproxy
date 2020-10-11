@@ -552,38 +552,42 @@ mod tests {
         assert_eq!(hdr.op_code, parsed_hdr.op_code);
     }
 
-    #[tokio::test]
-    async fn test_parse_op_msg() {
-        let mut buf = Vec::new();
+    fn msgop_to_buf(doc_id: i32, mut buf: impl Write) {
         buf.write_i32::<LittleEndian>(0i32).unwrap();   // flag bits
 
         // Section 0
         buf.write_u8(0).unwrap();
-        let doc = doc! { "x": "foo" };
+        let doc = doc! { format!("x{}", doc_id): "foo" };
         doc.to_writer(&mut buf).unwrap();
  
         // Section 1 - first document
         buf.write_u8(1).unwrap();                       // section type=1
         buf.write_i32::<LittleEndian>(1234).unwrap();   // section size (ignored in parser)
         buf.write(b"id0\0").unwrap();                   // id of the section
-        let doc = doc! { "y": "bar" };                  // first document
+        let doc = doc! { format!("y{}", doc_id): "bar" };                  // first document
         doc.to_writer(&mut buf).unwrap();
 
         // Section 1 - second document
         buf.write_u8(1).unwrap();                       // section type=1
         buf.write_i32::<LittleEndian>(1234).unwrap();   // section size (ignored in parser)
         buf.write(b"id1\0").unwrap();                   // id of the section
-        let doc = doc! { "z": "baz" };                  // first document
+        let doc = doc! { format!("z{}", doc_id): "baz" };                  // first document
         doc.to_writer(&mut buf).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_parse_op_msg() {
+        let mut buf = Vec::new();
+        msgop_to_buf(0, &mut buf);
 
         let msg = MsgOpMsg::from_reader(&buf[..]).await.unwrap();
 
         assert_eq!(0, msg.flag_bits);
         assert_eq!(3, msg.documents.len());
         assert_eq!(0, msg.section_bytes.len());
-        assert_eq!("x", msg.documents[0].get_str("op").unwrap());
-        assert_eq!("y", msg.documents[1].get_str("op").unwrap());
-        assert_eq!("z", msg.documents[2].get_str("op").unwrap());
+        assert_eq!("x0", msg.documents[0].get_str("op").unwrap());
+        assert_eq!("y0", msg.documents[1].get_str("op").unwrap());
+        assert_eq!("z0", msg.documents[2].get_str("op").unwrap());
     }
 
     #[tokio::test]
@@ -682,5 +686,9 @@ mod tests {
         assert_eq!(555, msg.starting_from);
         assert_eq!(666, msg.number_returned);
         assert_eq!(3, msg.documents.len());
+    }
+
+    #[tokio::test]
+    async fn test_parse_mongodb_message() {
     }
 }
