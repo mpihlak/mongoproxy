@@ -604,4 +604,18 @@ mod tests {
         assert_eq!("a", msg.query.get_str("op").unwrap());
         assert_eq!("ok", msg.query.get_str("comment").unwrap());
     }
+
+    #[tokio::test]
+    async fn test_parse_op_getmore() {
+        let mut buf = Vec::new();
+        buf.write_i32::<LittleEndian>(0).unwrap();      // zero
+        buf.write(b"tribbles\0").unwrap();              // collection name
+        buf.write_i32::<LittleEndian>(10).unwrap();     // number to return
+        buf.write_i64::<LittleEndian>(123456).unwrap(); // cursor id
+
+        let msg = MsgOpGetMore::from_reader(&buf[..]).await.unwrap();
+        assert_eq!("tribbles", msg.full_collection_name);
+        assert_eq!(10, msg.number_to_return);
+        assert_eq!(123456, msg.cursor_id);
+    }
 }
