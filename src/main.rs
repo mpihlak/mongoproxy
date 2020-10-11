@@ -20,8 +20,8 @@ use lazy_static::lazy_static;
 use mongoproxy::tracing;
 use mongoproxy::dstaddr;
 use mongoproxy::appconfig::{AppConfig};
-use mongoproxy::mongodb::tracker::{MongoStatsTracker};
-use mongoproxy::mongodb::messages::{MsgHeader, MongoMessage};
+use mongoproxy::tracker::{MongoStatsTracker};
+use mongoproxy::mongodb::{MsgHeader, MongoMessage};
 
 
 type BufBytes = Result<bytes::Bytes, std::io::Error>;
@@ -286,7 +286,7 @@ async fn proxy_bytes(
 {
     let mut tracker_ok = true;
 
-    use mongoproxy::mongodb::messages::debug_print;
+    use mongoproxy::mongodb::debug_print;
 
     loop {
         let mut buf = [0; 1024];
