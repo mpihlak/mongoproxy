@@ -105,6 +105,7 @@ impl fmt::Display for MongoMessage {
 }
 
 impl MongoMessage {
+
     pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<(MsgHeader, MongoMessage)> {
         let hdr = MsgHeader::from_reader(&mut rdr).await?;
 
@@ -171,7 +172,6 @@ impl MsgHeader {
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
     }
 
-    #[allow(dead_code)]
     pub fn write(&self, mut writer: impl Write) -> Result<()> {
         writer.write_u32::<LittleEndian>(self.message_length as u32)?;
         writer.write_u32::<LittleEndian>(self.request_id)?;
@@ -526,3 +526,61 @@ pub fn debug_print(mut rdr: impl Read) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+
+mod tests {
+    use super::*;
+    use byteorder::{LittleEndian, WriteBytesExt};
+    use bson::doc;
+
+    #[tokio::test]
+    async fn test_parse_header() {
+        let hdr = MsgHeader {
+            message_length: 100,
+            request_id: 1,
+            response_to: 2,
+            op_code: 2013,
+        };
+
+        let mut buf = Vec::new();
+        hdr.write(&mut buf).unwrap();
+
+        let parsed_hdr = MsgHeader::from_reader(&buf[..]).await.unwrap();
+        assert_eq!(hdr.message_length, parsed_hdr.message_length);
+        assert_eq!(hdr.request_id, parsed_hdr.request_id);
+        assert_eq!(hdr.response_to, parsed_hdr.response_to);
+        assert_eq!(hdr.op_code, parsed_hdr.op_code);
+    }
+
+    #[tokio::test]
+    async fn test_parse_op_msg() {
+        let mut buf = Vec::new();
+        buf.write_i32::<LittleEndian>(0i32).unwrap();   // flag bits
+
+        // Section 0
+        buf.write_u8(0).unwrap();
+        let doc = doc! { "x": "foo" };
+        doc.to_writer(&mut buf).unwrap();
+    
+        // Section 1 - first document
+        buf.write_u8(1).unwrap();                       // section type=1
+        buf.write_i32::<LittleEndian>(1234).unwrap();   // section size (ignored in parser)
+        buf.write(b"id0\0").unwrap();                   // id of the section
+        let doc = doc! { "y": "bar" };                  // first document
+        doc.to_writer(&mut buf).unwrap();
+
+        // Section 1 - second document
+        buf.write_u8(1).unwrap();                       // section type=1
+        buf.write_i32::<LittleEndian>(1234).unwrap();   // section size (ignored in parser)
+        buf.write(b"id1\0").unwrap();                   // id of the section
+        let doc = doc! { "z": "baz" };                  // first document
+        doc.to_writer(&mut buf).unwrap();
+
+        let msg = MsgOpMsg::from_reader(&buf[..]).await.unwrap();
+
+        assert_eq!(0, msg.flag_bits);
+        assert_eq!(3, msg.documents.len());
+        assert_eq!(0, msg.section_bytes.len());
+        assert_eq!("x", msg.documents[0].get_str("op").unwrap());
+    }
+}
