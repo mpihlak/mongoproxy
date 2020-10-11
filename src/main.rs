@@ -141,12 +141,13 @@ async fn main() {
 // Never returns.
 async fn run_accept_loop(local_addr: String, remote_addr: String, app: &AppConfig)
 {
-    let mut listener = TcpListener::bind(&local_addr).await.unwrap();
     if remote_addr.is_empty() {
         info!("Proxying {} -> <original dst>", local_addr);
     } else {
         info!("Proxying {} -> {}", local_addr, remote_addr);
     }
+
+    let mut listener = TcpListener::bind(&local_addr).await.unwrap();
 
     loop {
         match listener.accept().await {
@@ -295,8 +296,9 @@ async fn proxy_bytes(
             // the chances of server response arriving before the client
             // request has been tracked.
             if tracker_ok {
-                if let Err(e) = tracker_channel.send(Ok(bytes::Bytes::copy_from_slice(&buf))).await {
+                if let Err(e) = tracker_channel.send(Ok(bytes::Bytes::copy_from_slice(&buf[..len]))).await {
                     error!("{:?} error sending to tracker: {}", thread::current().id(), e);
+                    error!("{:?} stop tracking.", thread::current().id());
                     tracker_ok = false;
                 }
             }
@@ -323,11 +325,9 @@ async fn track_messages<F>(
                 tracker_fn(&hdr, &msg);
             },
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                warn!("{:?} EOF in tracking messages: {}", thread::current().id(), e);
                 return Ok(());
             },
             Err(e) => {
-                // XXX: Could just be an EOF
                 error!("{:?} error parsing mongodb message: {}", thread::current().id(), e);
                 return Err(e);
             }

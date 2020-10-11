@@ -5,7 +5,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec,Histogram};
 
-use std::io::{Read, Write, Cursor};
+use std::io::{Read, Write, Cursor, Error, ErrorKind};
 use tokio::io::{self, AsyncReadExt, Result};
 use bson;
 
@@ -121,10 +121,16 @@ impl MongoMessage {
     pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<(MsgHeader, MongoMessage)> {
         let hdr = MsgHeader::from_reader(&mut rdr).await?;
 
+        if hdr.message_length < HEADER_LENGTH {
+            return Err(Error::new(ErrorKind::Other, "Invalid MongoDb header"));
+        }
+
+        // Take only as much as promised in the header
+        let mut rdr = rdr.take((hdr.message_length - HEADER_LENGTH) as u64);
+
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
         // XXX: log_mongo_messages and trace_msg_body are not supported.
-        // I don't know how at the moment. Maybe drop them?
 
         let msg = match hdr.op_code {
                1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr, false).await?),
@@ -263,8 +269,6 @@ impl MsgOpMsg {
                 Ok(r)   => r,
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                     // This is OK if we've already read at least one doc
-                    // XXX: However, the passed reader must be an adapter
-                    // that has taken just the message length worth of bytes
                     break;
                 },
                 Err(e)  => {
