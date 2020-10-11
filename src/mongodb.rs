@@ -1,5 +1,5 @@
 use std::fmt;
-use log::{warn,debug};
+use log::{error,warn,debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec};
@@ -52,7 +52,6 @@ lazy_static! {
             "Number of unrecognized opcodes in MongoDb header",
             &["op"]).unwrap();
 
-    // XXX: We should actually capture parse errors
     static ref MESSAGE_PARSE_ERRORS_COUNTER: CounterVec =
         register_counter_vec!(
             "mongoproxy_message_parse_error_count_total",
@@ -118,7 +117,24 @@ impl MongoMessage {
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
-        let msg = match hdr.op_code {
+        let msg = match MongoMessage::extract_message(hdr.op_code, &mut rdr).await {
+            Ok(msg) => msg,
+            Err(e) => {
+                error!("Failed to parse MongoDb {} message: {}", hdr.op_code, e);
+                MESSAGE_PARSE_ERRORS_COUNTER.with_label_values(&[&e.to_string()]).inc();
+                return Err(e);
+            }
+        };
+
+        // Sink the rest of the bytes in case there are leftovers.
+        io::copy(&mut rdr, &mut tokio::io::sink()).await?;
+
+        Ok((hdr, msg))
+    }
+
+    // Extract a message or return an error
+    async fn extract_message(op: u32, mut rdr: impl AsyncReadExtPlus) -> Result<MongoMessage> {
+        let msg = match op {
                1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr).await?),
             2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr).await?),
             2005 => MongoMessage::GetMore(MsgOpGetMore::from_reader(&mut rdr).await?),
@@ -133,16 +149,13 @@ impl MongoMessage {
                 MongoMessage::None
             },
             _ => {
-                UNSUPPORTED_OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
-                warn!("Unhandled OP: {}", hdr.op_code);
+                UNSUPPORTED_OPCODE_COUNTER.with_label_values(&[&op.to_string()]).inc();
+                warn!("Unhandled OP: {}", op);
                 MongoMessage::None
             },
         };
 
-        // Sink the rest of the bytes in case there are leftovers.
-        io::copy(&mut rdr, &mut tokio::io::sink()).await?;
-
-        Ok((hdr, msg))
+        Ok(msg)
     }
 }
 
@@ -704,7 +717,7 @@ mod tests {
                 op_code: 2013,
             };
 
-            hdr.write(&mut buf);
+            hdr.write(&mut buf).unwrap();
             buf.extend(&msg_buf);
         }
 
