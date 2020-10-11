@@ -636,4 +636,19 @@ mod tests {
         assert_eq!("a", msg.selector.get_str("op").unwrap());
         assert_eq!("b", msg.update.get_str("op").unwrap());
     }
+
+    #[tokio::test]
+    async fn test_parse_op_delete() {
+        let mut buf = Vec::new();
+        buf.write_i32::<LittleEndian>(0).unwrap();      // zero
+        buf.write(b"tribbles\0").unwrap();              // collection name
+        buf.write_i32::<LittleEndian>(123).unwrap();    // flags
+        let doc = doc! { "a": 1 };                      // selector
+        doc.to_writer(&mut buf).unwrap();
+
+        let msg = MsgOpDelete::from_reader(&buf[..]).await.unwrap();
+        assert_eq!("tribbles", msg.full_collection_name);
+        assert_eq!(123, msg.flags);
+        assert_eq!("a", msg.selector.get_str("op").unwrap());
+    }
 }
