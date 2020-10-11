@@ -582,5 +582,7 @@ mod tests {
         assert_eq!(3, msg.documents.len());
         assert_eq!(0, msg.section_bytes.len());
         assert_eq!("x", msg.documents[0].get_str("op").unwrap());
+        assert_eq!("y", msg.documents[1].get_str("op").unwrap());
+        assert_eq!("z", msg.documents[2].get_str("op").unwrap());
     }
 }
