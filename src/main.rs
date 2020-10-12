@@ -246,6 +246,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
             let mut tracker = client_tracker.lock().unwrap();
             tracker.track_client_request(&hdr, &msg);
         }).await?;
+        // XXX: We ought to flag the situatin where trackers completes with an errors
         Ok::<(), io::Error>(())
     });
 
