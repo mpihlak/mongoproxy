@@ -1,8 +1,10 @@
 use std::fmt;
-use log::{error,warn,debug};
+use log::{error,warn,info,debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec};
+use std::thread;
+use bson;
 
 use std::io::{Read, Write, Error, ErrorKind};
 use tokio::io::{self, AsyncReadExt, Result};
@@ -105,7 +107,11 @@ impl fmt::Display for MongoMessage {
 
 impl MongoMessage {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<(MsgHeader, MongoMessage)> {
+    pub async fn from_reader(
+        mut rdr: impl AsyncReadExtPlus,
+        log_mongo_messages: bool,
+        collect_tracing_data: bool,
+    ) -> Result<(MsgHeader, MongoMessage)> {
         let hdr = MsgHeader::from_reader(&mut rdr).await?;
 
         if hdr.message_length < HEADER_LENGTH {
@@ -117,7 +123,11 @@ impl MongoMessage {
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
-        let msg = match MongoMessage::extract_message(hdr.op_code, &mut rdr).await {
+        let msg = match MongoMessage::extract_message(
+                hdr.op_code,
+                &mut rdr,
+                log_mongo_messages,
+                collect_tracing_data).await {
             Ok(msg) => msg,
             Err(e) => {
                 error!("Failed to parse MongoDb {} message: {}", hdr.op_code, e);
@@ -133,16 +143,22 @@ impl MongoMessage {
     }
 
     // Extract a message or return an error
-    async fn extract_message(op: u32, mut rdr: impl AsyncReadExtPlus) -> Result<MongoMessage> {
+    async fn extract_message(
+        op: u32,
+        mut rdr: impl AsyncReadExtPlus,
+        log_mongo_messages: bool,
+        collect_tracing_data: bool,
+    ) -> Result<MongoMessage> {
         let msg = match op {
-               1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr).await?),
-            2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr).await?),
+               1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr, log_mongo_messages).await?),
+            2004 => MongoMessage::Query(MsgOpQuery::from_reader(&mut rdr, log_mongo_messages).await?),
             2005 => MongoMessage::GetMore(MsgOpGetMore::from_reader(&mut rdr).await?),
             2001 => MongoMessage::Update(MsgOpUpdate::from_reader(&mut rdr).await?),
             2006 => MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr).await?),
             2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr).await?),
             2012 => MongoMessage::Compressed(MsgOpCompressed::from_reader(&mut rdr).await?),
-            2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr).await?),
+            2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr,
+                        log_mongo_messages, collect_tracing_data).await?),
             2010 | 2011 => {
                 // This is an undocumented legacy protocol that some clients (bad Robo3T)
                 // still use. We ignore it.
@@ -231,12 +247,16 @@ impl ResponseDocuments for MsgOpMsg {
 
 impl MsgOpMsg {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(
+        mut rdr: impl AsyncReadExtPlus,
+        log_mongo_messages: bool,
+        collect_tracing_data: bool,
+    ) -> Result<Self> {
         let flag_bits = rdr.read_u32_le().await?;
         debug!("flag_bits={:04x}", flag_bits);
 
         let mut documents = Vec::new();
-        let section_bytes = Vec::new();
+        let mut section_bytes = Vec::new();
 
         loop {
             let kind = match rdr.read_u8().await {
@@ -275,8 +295,28 @@ impl MsgOpMsg {
                 // Nothing to do here, reader already at the start of the document
             }
 
-            let doc = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+            let doc = MONGO_DOC_PARSER.parse_document_opt(
+                    &mut rdr,
+                    log_mongo_messages | collect_tracing_data).await?;
             debug!("doc: {}", doc);
+
+            if log_mongo_messages {
+                if let Some(bytes) = doc.get_raw_bytes() {
+                    if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
+                        info!("{:?} OP_MSG BSON: {}", thread::current().id(), doc);
+                    } else {
+                        warn!("{:?} OP_MSG BSON parsing failed", thread::current().id());
+                    }
+                }
+            }
+
+            if collect_tracing_data && (doc.contains_key("comment")
+                    || doc.get_str("op").unwrap_or("") == "killCursors") {
+                if let Some(bytes) = doc.get_raw_bytes() {
+                    section_bytes.push(bytes.clone());
+                }
+            }
+
             documents.push(doc);
         }
 
@@ -327,12 +367,22 @@ impl fmt::Display for MsgOpQuery {
 
 impl MsgOpQuery {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus, log_mongo_messages: bool) -> Result<Self> {
         let flags  = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
         let number_to_skip = rdr.read_i32_le().await?;
         let number_to_return = rdr.read_i32_le().await?;
-        let query = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+        let query = MONGO_DOC_PARSER.parse_document_opt(&mut rdr, log_mongo_messages).await?;
+
+        if log_mongo_messages {
+            if let Some(bytes) = query.get_raw_bytes() {
+                if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
+                    info!("{:?} OP_QUERY BSON: {}", thread::current().id(), doc);
+                }
+            } else {
+                warn!("{:?} OP_QUERY BSON parsing failed", thread::current().id());
+            }
+        }
 
         Ok(MsgOpQuery{flags, full_collection_name, number_to_skip, number_to_return, query})
     }
@@ -470,15 +520,27 @@ impl ResponseDocuments for MsgOpReply {
 
 impl MsgOpReply {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus, log_mongo_messages: bool) -> Result<Self> {
         let flags  = rdr.read_u32_le().await?;
         let cursor_id = rdr.read_u64_le().await?;
         let starting_from = rdr.read_u32_le().await?;
         let number_returned = rdr.read_u32_le().await?;
         let mut documents = Vec::new();
 
-        while let Ok(doc) = MONGO_DOC_PARSER.parse_document(&mut rdr).await {
+        while let Ok(doc) = MONGO_DOC_PARSER.parse_document_opt(&mut rdr, log_mongo_messages).await {
             documents.push(doc);
+        }
+
+        if log_mongo_messages {
+            for doc in documents.iter() {
+                if let Some(bytes) = doc.get_raw_bytes() {
+                    if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
+                        info!("{:?} OP_REPLY BSON: {}", thread::current().id(), doc);
+                    }
+                } else {
+                    warn!("{:?} OP_REPLY BSON parsing failed", thread::current().id());
+                }
+            }
         }
 
         Ok(MsgOpReply{flags, cursor_id, starting_from, number_returned, documents})
@@ -593,7 +655,7 @@ mod tests {
         let mut buf = Vec::new();
         msgop_to_buf(0, &mut buf);
 
-        let msg = MsgOpMsg::from_reader(&buf[..]).await.unwrap();
+        let msg = MsgOpMsg::from_reader(&buf[..], false, false).await.unwrap();
 
         assert_eq!(0, msg.flag_bits);
         assert_eq!(3, msg.documents.len());
@@ -613,7 +675,7 @@ mod tests {
         let doc = doc! { "a": 1, "q": { "$comment": "ok" } };   // query text
         doc.to_writer(&mut buf).unwrap();
 
-        let msg = MsgOpQuery::from_reader(&buf[..]).await.unwrap();
+        let msg = MsgOpQuery::from_reader(&buf[..], false).await.unwrap();
         assert_eq!(0, msg.flags);
         assert_eq!("tribbles", msg.full_collection_name);
         assert_eq!(9, msg.number_to_skip);
@@ -693,7 +755,7 @@ mod tests {
             doc.to_writer(&mut buf).unwrap();
         }
 
-        let msg = MsgOpReply::from_reader(&buf[..]).await.unwrap();
+        let msg = MsgOpReply::from_reader(&buf[..], false).await.unwrap();
         assert_eq!(123, msg.flags);
         assert_eq!(123456, msg.cursor_id);
         assert_eq!(555, msg.starting_from);
@@ -723,7 +785,7 @@ mod tests {
 
         let mut cur = std::io::Cursor::new(buf);
         let mut messages = Vec::new();
-        while let Ok((_, msg)) = MongoMessage::from_reader(&mut cur).await {
+        while let Ok((_, msg)) = MongoMessage::from_reader(&mut cur, false, false).await {
             messages.push(msg);
         }
 

@@ -219,6 +219,9 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
 
     let client_addr = format_client_address(&client_stream.peer_addr()?);
 
+    let log_mongo_messages = app.log_mongo_messages;
+    let tracing_enabled = app.tracer.is_some();
+
     let tracker = Arc::new(Mutex::new(
             MongoStatsTracker::new(
                 &client_addr,
@@ -239,7 +242,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let (server_tx, server_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
 
     tokio::spawn(async move {
-        track_messages(client_rx, move |hdr, msg| {
+        track_messages(client_rx, log_mongo_messages, tracing_enabled, move |hdr, msg| {
             let mut tracker = client_tracker.lock().unwrap();
             tracker.track_client_request(&hdr, &msg);
         }).await?;
@@ -247,7 +250,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     });
 
     tokio::spawn(async move {
-        track_messages(server_rx, move |hdr, msg| {
+        track_messages(server_rx, log_mongo_messages, false, move |hdr, msg| {
             let mut tracker = server_tracker.lock().unwrap();
             tracker.track_server_response(&hdr, &msg);
         }).await?;
@@ -311,13 +314,15 @@ async fn proxy_bytes(
 // and sending them off to a tracker.
 async fn track_messages<F>(
     rx: mpsc::Receiver<BufBytes>,
+    log_mongo_messages: bool,
+    collect_tracing_data: bool,
     mut tracker_fn: F
 ) -> Result<(), std::io::Error>
     where F: FnMut(&MsgHeader, &MongoMessage)
 {
     let mut s = stream_reader(rx);
     loop {
-        match MongoMessage::from_reader(&mut s).await {
+        match MongoMessage::from_reader(&mut s, log_mongo_messages, collect_tracing_data).await {
             Ok((hdr, msg)) => {
                 tracker_fn(&hdr, &msg);
             },
