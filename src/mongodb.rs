@@ -123,17 +123,28 @@ impl MongoMessage {
         // Take only as much as promised in the header.
         let mut rdr = rdr.take((hdr.message_length - HEADER_LENGTH) as u64);
 
+        // XXX: Load the message into buffer for debugging
+        let mut buf = Vec::new();
+        let len = rdr.read_to_end(&mut buf).await?;
+        let buf = &buf[..len];
+
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
         let msg = match MongoMessage::extract_message(
                 hdr.op_code,
-                &mut rdr,
+                //&mut rdr,
+                &mut &buf[..],
                 log_mongo_messages,
                 collect_tracing_data).await {
             Ok(msg) => msg,
             Err(e) => {
                 error!("Failed to parse MongoDb {} message: {}", hdr.op_code, e);
+                error!("{} bytes:", len);
+                debug_print(&buf[..]).unwrap();
                 MESSAGE_PARSE_ERRORS_COUNTER.with_label_values(&[&e.to_string()]).inc();
+
+                // In theory we could keep the parser active -- maybe it's just this message
+                // that got garbled.
                 return Err(e);
             }
         };
