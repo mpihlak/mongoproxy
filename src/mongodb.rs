@@ -138,8 +138,10 @@ impl MongoMessage {
             }
         };
 
-        // Sink the rest of the bytes in case there are leftovers.
-        io::copy(&mut rdr, &mut tokio::io::sink()).await?;
+        let len = io::copy(&mut rdr, &mut tokio::io::sink()).await?;
+        if len > 0 {
+            warn!("sinking {} bytes.", len);
+        }
 
         Ok((hdr, msg))
     }
