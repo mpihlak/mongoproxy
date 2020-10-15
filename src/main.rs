@@ -11,13 +11,14 @@ use tokio::sync::mpsc;
 
 use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
-use log::{info,warn,error,debug};
+use tracing::{info,warn,error,debug,Level};
+use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use lazy_static::lazy_static;
 
 #[macro_use] extern crate prometheus;
 #[macro_use] extern crate rouille;
 
-use mongoproxy::tracing;
+use mongoproxy::jaeger_tracing;
 use mongoproxy::dstaddr;
 use mongoproxy::appconfig::{AppConfig};
 use mongoproxy::tracker::{MongoStatsTracker};
@@ -108,7 +109,13 @@ async fn main() {
     let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
     let jaeger_addr = lookup_address(matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR)).unwrap();
 
-    env_logger::init();
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::TRACE)
+        .with_env_filter(EnvFilter::from_default_env())
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default trace subscriber failed");
 
     info!("MongoProxy v{}", crate_version!());
 
@@ -119,7 +126,7 @@ async fn main() {
     let (local_hostport, remote_hostport) = parse_proxy_addresses(proxy_spec).unwrap();
 
     let app = AppConfig::new(
-        tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr),
+        jaeger_tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr),
         log_mongo_messages,
     );
 

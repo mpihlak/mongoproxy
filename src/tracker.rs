@@ -1,12 +1,12 @@
 use crate::mongodb::{MsgHeader,MongoMessage,ResponseDocuments};
-use crate::tracing;
+use crate::jaeger_tracing;
 use crate::appconfig::{AppConfig};
 
 use std::time::{Instant};
 use std::{thread};
 use std::collections::{HashMap, HashSet};
 
-use log::{debug,warn};
+use tracing::{debug,warn};
 use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
 
 use async_bson::Document;
@@ -209,7 +209,7 @@ impl ClientRequest {
                             }
                         } else if let Some(comm) = s.get_str("comment") {
                             debug!("Have a comment field: {}", comm);
-                            match tracing::extract_from_text(comm) {
+                            match jaeger_tracing::extract_from_text(comm) {
                                 Ok(Some(parent)) => {
                                     debug!("Extracted trace header: {:?}", parent);
                                     let mut new_span = tracer

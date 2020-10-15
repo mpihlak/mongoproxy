@@ -1,5 +1,5 @@
 use std::fmt;
-use log::{error,warn,info,debug};
+use tracing::{error,warn,info,debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec};

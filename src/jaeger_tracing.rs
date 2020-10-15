@@ -2,7 +2,7 @@ use std::thread;
 use std::collections::HashMap;
 use std::net::{SocketAddr};
 
-use log::{warn,info,debug};
+use tracing::{warn,info,debug};
 
 use rustracing::{self,sampler::AllSampler,span::SpanContext,carrier::ExtractFromTextMap};
 use rustracing_jaeger::{reporter::JaegerCompactReporter};

@@ -25,7 +25,7 @@ mod linux {
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
     use std::os::unix::io::RawFd;
     use std::{io, mem};
-    use log::{warn};
+    use tracing::warn;
 
     pub unsafe fn so_original_dst(fd: RawFd) -> io::Result<SocketAddr> {
         let mut sockaddr: libc::sockaddr_storage = mem::zeroed();
