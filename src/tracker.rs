@@ -5,7 +5,7 @@ use crate::appconfig::{AppConfig};
 use std::time::{Instant};
 use std::collections::{HashMap, HashSet};
 
-use tracing::{debug,warn};
+use tracing::{debug, warn, info_span};
 use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
 
 use async_bson::Document;
@@ -345,7 +345,8 @@ impl MongoStatsTracker{
     pub fn track_client_request(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
-        debug!("hdr: {} msg: {}", hdr, msg);
+        let span = info_span!("track_client_request");
+        let _ = span.enter();
 
         // Ignore useless messages
         if let MongoMessage::None = msg {
@@ -403,7 +404,8 @@ impl MongoStatsTracker{
     pub fn track_server_response(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
         CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
-        debug!("server: hdr: {} msg: {}", hdr, msg);
+        let span = info_span!("track_server_response");
+        let _ = span.enter();
 
         // Ignore useless messages
         if let MongoMessage::None = msg {
