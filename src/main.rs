@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
-use tracing::{info,warn,error,debug,Level};
+use tracing::{info, warn, error, debug, info_span, Instrument, Level};
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use lazy_static::lazy_static;
 
@@ -159,6 +159,7 @@ async fn run_accept_loop(local_addr: String, remote_addr: String, app: &AppConfi
     loop {
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
+                let client_ip_port = peer_addr.to_string();
                 let client_addr = format_client_address(&peer_addr);
 
                 let server_addr = if remote_addr.is_empty() {
@@ -179,26 +180,34 @@ async fn run_accept_loop(local_addr: String, remote_addr: String, app: &AppConfi
                 };
 
                 let app = app.clone();
+                let server_ip_port = server_addr.clone();
 
                 CONNECTION_COUNT_TOTAL.with_label_values(&[&client_addr.to_string()]).inc();
 
-                tokio::spawn(async move {
-                    info!("{:?} new connection from {}", thread::current().id(), client_addr);
+                let conn_handler = async move {
+                    info!("new connection from {}", client_addr);
                     match handle_connection(&server_addr, stream, app).await {
                         Ok(_) => {
-                            info!("{:?} {} closing connection.", thread::current().id(), client_addr);
+                            info!("{} closing connection.", client_addr);
                             DISCONNECTION_COUNT_TOTAL
                                 .with_label_values(&[&client_addr.to_string()])
                                 .inc();
                         },
                         Err(e) => {
-                            warn!("{:?} {} connection error: {}", thread::current().id(), client_addr, e);
+                            warn!("{} connection error: {}", client_addr, e);
                             CONNECTION_ERRORS_TOTAL
                                 .with_label_values(&[&client_addr.to_string()])
                                 .inc();
                         },
                     };
-                });
+                };
+
+                tokio::spawn(
+                    conn_handler.instrument(
+                        tracing::info_span!("handle_connection",
+                            client_addr = client_ip_port.as_str(),
+                            server_addr = server_ip_port.as_str()))
+                );
             },
             Err(e) => {
                 warn!("accept: {:?}", e)
@@ -215,10 +224,11 @@ async fn run_accept_loop(local_addr: String, remote_addr: String, app: &AppConfi
 // which then parses the messages and collects metrics from it. Should the tracker fail, the
 // proxy still remains operational.
 //
+
 async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: AppConfig)
     -> Result<(), Box<dyn Error>>
 {
-    info!("{:?} connecting to server: {}", thread::current().id(), server_addr);
+    info!("connecting to server: {}", server_addr);
     let timer = SERVER_CONNECT_TIME_SECONDS.with_label_values(&[server_addr]).start_timer();
     let server_addr = lookup_address(server_addr)?;
     let server_stream = TcpStream::connect(&server_addr).await?;
@@ -255,7 +265,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
         }).await?;
         // XXX: We ought to flag the situatin where trackers completes with an errors
         Ok::<(), io::Error>(())
-    });
+    }.instrument(info_span!("client tracker")));
 
     tokio::spawn(async move {
         track_messages(server_rx, log_mongo_messages, false, move |hdr, msg| {
@@ -263,7 +273,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
             tracker.track_server_response(&hdr, &msg);
         }).await?;
         Ok::<(), io::Error>(())
-    });
+    }.instrument(info_span!("server tracker")));
 
     // Now start proxying bytes between the client and the server.
 
@@ -273,12 +283,12 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let client_task = async {
         proxy_bytes(&mut read_client, &mut write_server, client_tx).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
-    };
+    }.instrument(info_span!("client proxy"));
 
     let server_task = async {
         proxy_bytes(&mut read_server, &mut write_client, server_tx).await?;
         Ok::<(), Box<dyn Error+Sync+Send>>(())
-    };
+    }.instrument(info_span!("server proxy"));
 
     match tokio::try_join!(client_task, server_task) {
         Ok(_) => Ok(()),
@@ -306,8 +316,8 @@ async fn proxy_bytes(
 
             if tracker_ok {
                 if let Err(e) = tracker_channel.send(Ok(bytes::Bytes::copy_from_slice(&buf[..len]))).await {
-                    error!("{:?} error sending to tracker: {}", thread::current().id(), e);
-                    error!("{:?} stop tracking.", thread::current().id());
+                    error!("error sending to tracker: {}", e);
+                    error!("stop tracking.");
                     tracker_ok = false;
                 }
             }
@@ -338,7 +348,7 @@ async fn track_messages<F>(
                 return Ok(());
             },
             Err(e) => {
-                error!("{:?} error parsing mongodb message: {}", thread::current().id(), e);
+                error!("error parsing mongodb message: {}", e);
                 return Err(e);
             }
         }
@@ -347,7 +357,7 @@ async fn track_messages<F>(
 
 fn lookup_address(addr: &str) -> std::io::Result<SocketAddr> {
     if let Some(sockaddr) = addr.to_socket_addrs()?.next() {
-        debug!("{:?} {} resolves to {}", thread::current().id(), addr, sockaddr);
+        debug!("{} resolves to {}", addr, sockaddr);
         return Ok(sockaddr);
     }
     Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "no usable address found"))

@@ -3,7 +3,6 @@ use tracing::{error,warn,info,debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec};
-use std::thread;
 use bson;
 
 use std::io::{Read, Write, Error, ErrorKind};
@@ -308,9 +307,9 @@ impl MsgOpMsg {
             if log_mongo_messages {
                 if let Some(bytes) = doc.get_raw_bytes() {
                     if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
-                        info!("{:?} OP_MSG BSON: {}", thread::current().id(), doc);
+                        info!("OP_MSG BSON: {}", doc);
                     } else {
-                        warn!("{:?} OP_MSG BSON parsing failed", thread::current().id());
+                        warn!("OP_MSG BSON parsing failed");
                     }
                 }
             }
@@ -382,10 +381,10 @@ impl MsgOpQuery {
         if log_mongo_messages {
             if let Some(bytes) = query.get_raw_bytes() {
                 if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
-                    info!("{:?} OP_QUERY BSON: {}", thread::current().id(), doc);
+                    info!("OP_QUERY BSON: {}", doc);
                 }
             } else {
-                warn!("{:?} OP_QUERY BSON parsing failed", thread::current().id());
+                warn!("OP_QUERY BSON parsing failed");
             }
         }
 
@@ -540,10 +539,10 @@ impl MsgOpReply {
             for doc in documents.iter() {
                 if let Some(bytes) = doc.get_raw_bytes() {
                     if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
-                        info!("{:?} OP_REPLY BSON: {}", thread::current().id(), doc);
+                        info!("OP_REPLY BSON: {}", doc);
                     }
                 } else {
-                    warn!("{:?} OP_REPLY BSON parsing failed", thread::current().id());
+                    warn!("OP_REPLY BSON parsing failed");
                 }
             }
         }

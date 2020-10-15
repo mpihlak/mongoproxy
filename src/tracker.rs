@@ -3,7 +3,6 @@ use crate::jaeger_tracing;
 use crate::appconfig::{AppConfig};
 
 use std::time::{Instant};
-use std::{thread};
 use std::collections::{HashMap, HashSet};
 
 use tracing::{debug,warn};
@@ -346,7 +345,7 @@ impl MongoStatsTracker{
     pub fn track_client_request(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
-        debug!("{:?}: {} client: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
+        debug!("hdr: {} msg: {}", hdr, msg);
 
         // Ignore useless messages
         if let MongoMessage::None = msg {
@@ -404,7 +403,7 @@ impl MongoStatsTracker{
     pub fn track_server_response(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
         CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
-        debug!("{:?}: {} server: hdr: {} msg: {}", thread::current().id(), self.client_addr, hdr, msg);
+        debug!("server: hdr: {} msg: {}", hdr, msg);
 
         // Ignore useless messages
         if let MongoMessage::None = msg {
@@ -421,7 +420,7 @@ impl MongoStatsTracker{
             // process when the matching client request arrives. Timing the requests will be funny
             // though.
             RESPONSE_TO_REQUEST_MISMATCH.inc();
-            warn!("{:?}: response {} not mapped to request", thread::current().id(), hdr.response_to);
+            warn!("response {} not mapped to request", hdr.response_to);
         }
     }
 
