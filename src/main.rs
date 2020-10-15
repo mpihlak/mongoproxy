@@ -258,12 +258,16 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let (client_tx, client_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
     let (server_tx, server_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
 
+    // XXX: When one of the trackers fails, we need to also stop the other.
+    // Especially we don't want to keep on tracking client since it'll keep
+    // storing request id's into a hashmap and expects server tracker to clean
+    // them up
+
     tokio::spawn(async move {
         track_messages(client_rx, log_mongo_messages, tracing_enabled, move |hdr, msg| {
             let mut tracker = client_tracker.lock().unwrap();
             tracker.track_client_request(&hdr, &msg);
         }).await?;
-        // XXX: We ought to flag the situatin where trackers completes with an errors
         Ok::<(), io::Error>(())
     }.instrument(info_span!("client tracker")));
 
@@ -348,7 +352,7 @@ async fn track_messages<F>(
                 return Ok(());
             },
             Err(e) => {
-                error!("error parsing mongodb message: {}", e);
+                error!("Tracker failed: {}", e);
                 return Err(e);
             }
         }
