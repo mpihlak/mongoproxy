@@ -139,7 +139,7 @@ impl MongoMessage {
 
         let len = io::copy(&mut rdr, &mut tokio::io::sink()).await?;
         if len > 0 {
-            warn!("sinking {} bytes.", len);
+            warn!("partial message, sinking {} bytes.", len);
         }
 
         Ok((hdr, msg))
