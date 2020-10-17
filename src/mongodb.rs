@@ -1,5 +1,5 @@
 use std::fmt;
-use tracing::{error,warn,info,debug};
+use tracing::{error, warn, info, debug, trace};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec};
@@ -16,7 +16,7 @@ impl <T>AsyncReadExtPlus for T where T: AsyncReadExt+Unpin+Send {}
 
 lazy_static! {
     static ref MONGO_DOC_PARSER: DocumentParser<'static> =
-        DocumentParser::new()
+        DocumentParser::builder()
             .match_name_at("/", 1, "op")
             .match_value_at("/", 1, "op_value")
             .match_exact("/$db", "db")
@@ -308,6 +308,7 @@ impl MsgOpMsg {
                 if let Some(bytes) = doc.get_raw_bytes() {
                     if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
                         info!("OP_MSG BSON: {}", doc);
+                        trace!("bytes = {:#x?}", bytes);
                     } else {
                         warn!("OP_MSG BSON parsing failed");
                     }
