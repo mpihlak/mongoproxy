@@ -59,8 +59,8 @@ checksum = "97be891acc47ca214468e09425d02cef3af2c94d0d82081cd02061f996802f14"
 
 [[package]]
 name = "async-bson"
-version = "0.1.7"
-source = "git+https://github.com/mpihlak/async-bson#fd9b6d36f1805054b04096ece88401e76ecdbd08"
+version = "0.1.8"
+source = "git+https://github.com/mpihlak/async-bson#f888b659372ac6678d0c88fc908291fcc41b201a"
 dependencies = [
  "async-recursion",
  "tokio",

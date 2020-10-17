@@ -1,11 +1,11 @@
 use std::fmt;
-use tracing::{error, warn, info, debug, trace};
+use tracing::{error, warn, info, debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec};
 use bson;
 
-use std::io::{Read, Write, Error, ErrorKind};
+use std::io::{Write, Error, ErrorKind};
 use tokio::io::{self, AsyncReadExt, Result};
 
 
@@ -304,11 +304,17 @@ impl MsgOpMsg {
                     log_mongo_messages | collect_tracing_data).await?;
             debug!("doc: {}", doc);
 
+            if doc.is_partial() {
+                if let Some(bytes) = doc.get_raw_bytes() {
+                    // XXX: debug dump
+                    warn!("partial message:\n{}", debug_fmt(&bytes[..]));
+                }
+            }
+
             if log_mongo_messages {
                 if let Some(bytes) = doc.get_raw_bytes() {
                     if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
                         info!("OP_MSG BSON: {}", doc);
-                        trace!("bytes = {:#x?}", bytes);
                     } else {
                         warn!("OP_MSG BSON parsing failed");
                     }
@@ -579,31 +585,31 @@ impl MsgOpCompressed {
     }
 }
 
-// Debugging helper to print out xxd compatible byte dumps.
-pub fn debug_print(mut rdr: impl Read) -> Result<()> {
-    let mut buf = Vec::new();
-
-    rdr.read_to_end(&mut buf)?;
-
+// Convert a byte slice into xxd compatible hex dump
+pub fn debug_fmt(buf: &[u8]) -> String {
     let mut hex_str = String::new();
     let mut txt_str = String::new();
+    let mut result = String::new();
     let mut offset = 0;
+
     for (i, b) in buf.iter().enumerate() {
-        hex_str.push_str(&format!("{:02x} ", b));
+        hex_str.push_str(&format!("{:02x} ", *b));
         txt_str.push(if *b < 32 || *b > 127 { '.' } else { *b as char });
+
         if (i + 1) % 16 == 0 {
-            println!("{:08x}: {}{}", offset, hex_str, txt_str);
-            offset += 16;
+            fmt::write(&mut result, format_args!("{:08x}: {}{}\n", offset, hex_str, txt_str)).unwrap();
             hex_str.clear();
             txt_str.clear();
+            offset += 16;
         }
     }
+
     if !hex_str.is_empty() {
         let padding = " ".repeat(48 - hex_str.len());
-        println!("{:08x}: {}{}{}", offset, hex_str, padding, txt_str);
+        fmt::write(&mut result, format_args!("{:08x}: {}{}{}\n", offset, hex_str, padding, txt_str)).unwrap();
     }
 
-    Ok(())
+    result
 }
 
 #[cfg(test)]
@@ -639,7 +645,7 @@ mod tests {
         buf.write_u8(0).unwrap();
         let doc = doc! { format!("x{}", doc_id): "foo" };
         doc.to_writer(&mut buf).unwrap();
- 
+
         // Section 1 - first document
         buf.write_u8(1).unwrap();                       // section type=1
         buf.write_i32::<LittleEndian>(1234).unwrap();   // section size (ignored in parser)
@@ -835,4 +841,15 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_debug_fmt() {
+        let buf = b"0123456789abcdefg";
+        let want_result = "\
+            00000000: 30 31 32 33 34 35 36 37 38 39 61 62 63 64 65 66 0123456789abcdef\n\
+            00000010: 67                                              g\n";
+
+        assert_eq!(want_result, debug_fmt(&buf[..]));
+    }
+
 }
