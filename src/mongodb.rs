@@ -304,13 +304,6 @@ impl MsgOpMsg {
                     log_mongo_messages | collect_tracing_data).await?;
             debug!("doc: {}", doc);
 
-            if doc.is_partial() {
-                if let Some(bytes) = doc.get_raw_bytes() {
-                    // XXX: debug dump
-                    warn!("partial message:\n{}", debug_fmt(&bytes[..]));
-                }
-            }
-
             if log_mongo_messages {
                 if let Some(bytes) = doc.get_raw_bytes() {
                     if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
