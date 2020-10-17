@@ -299,7 +299,7 @@ impl MsgOpMsg {
                 // Nothing to do here, reader already at the start of the document
             }
 
-            let doc = MONGO_DOC_PARSER.parse_document_opt(
+            let doc = MONGO_DOC_PARSER.parse_document_keep_bytes(
                     &mut rdr,
                     log_mongo_messages | collect_tracing_data).await?;
             debug!("doc: {}", doc);
@@ -376,7 +376,7 @@ impl MsgOpQuery {
         let full_collection_name = read_cstring(&mut rdr).await?;
         let number_to_skip = rdr.read_i32_le().await?;
         let number_to_return = rdr.read_i32_le().await?;
-        let query = MONGO_DOC_PARSER.parse_document_opt(&mut rdr, log_mongo_messages).await?;
+        let query = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages).await?;
 
         if log_mongo_messages {
             if let Some(bytes) = query.get_raw_bytes() {
@@ -531,7 +531,7 @@ impl MsgOpReply {
         let number_returned = rdr.read_u32_le().await?;
         let mut documents = Vec::new();
 
-        while let Ok(doc) = MONGO_DOC_PARSER.parse_document_opt(&mut rdr, log_mongo_messages).await {
+        while let Ok(doc) = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages).await {
             documents.push(doc);
         }
 
