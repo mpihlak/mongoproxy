@@ -1,7 +1,6 @@
 use std::sync::{Arc,Mutex};
 use std::net::{SocketAddr,ToSocketAddrs};
-use std::io::{self};
-use std::error::{Error};
+use std::io;
 use std::{thread, str};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, stream_reader};
@@ -25,7 +24,7 @@ use mongoproxy::tracker::{MongoStatsTracker};
 use mongoproxy::mongodb::{MsgHeader, MongoMessage};
 
 
-type BufBytes = Result<bytes::Bytes, std::io::Error>;
+type BufBytes = Result<bytes::Bytes, io::Error>;
 
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
 const ADMIN_PORT: &str = "9898";
@@ -226,7 +225,7 @@ async fn run_accept_loop(local_addr: String, remote_addr: String, app: &AppConfi
 //
 
 async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: AppConfig)
-    -> Result<(), Box<dyn Error>>
+    -> Result<(), io::Error>
 {
     info!("connecting to server: {}", server_addr);
     let timer = SERVER_CONNECT_TIME_SECONDS.with_label_values(&[server_addr]).start_timer();
@@ -258,10 +257,8 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let (client_tx, client_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
     let (server_tx, server_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
 
-    // XXX: When one of the trackers fails, we need to also stop the other.
-    // Especially we don't want to keep on tracking client since it'll keep
-    // storing request id's into a hashmap and expects server tracker to clean
-    // them up
+    let signal_client = client_tx.clone();
+    let signal_server = server_tx.clone();
 
     tokio::spawn(async move {
         track_messages(client_rx, log_mongo_messages, tracing_enabled, move |hdr, msg| {
@@ -285,29 +282,31 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let (mut read_server, mut write_server) = server_stream.into_split();
 
     let client_task = async {
-        proxy_bytes(&mut read_client, &mut write_server, client_tx).await?;
-        Ok::<(), Box<dyn Error+Sync+Send>>(())
+        proxy_bytes(&mut read_client, &mut write_server, client_tx, signal_server).await?;
+        Ok::<(), io::Error>(())
     }.instrument(info_span!("client proxy"));
 
     let server_task = async {
-        proxy_bytes(&mut read_server, &mut write_client, server_tx).await?;
-        Ok::<(), Box<dyn Error+Sync+Send>>(())
+        proxy_bytes(&mut read_server, &mut write_client, server_tx, signal_client).await?;
+        Ok::<(), io::Error>(())
     }.instrument(info_span!("server proxy"));
 
     match tokio::try_join!(client_task, server_task) {
         Ok(_) => Ok(()),
-        Err(e) if e.to_string() == "EOF" => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
         Err(e) => Err(e),
     }
 }
 
 // Move bytes between sockets, forking the byte stream into a mpsc channel
-// for processing.
+// for processing. Another channel is used to notify the other tracker of
+// failures.
 async fn proxy_bytes(
     read_from: &mut OwnedReadHalf,
     write_to: &mut OwnedWriteHalf,
     mut tracker_channel: mpsc::Sender<BufBytes>,
-) -> Result<(), Box<dyn Error+Sync+Send>>
+    mut notify_channel: mpsc::Sender<BufBytes>,
+) -> Result<(), io::Error>
 {
     let mut tracker_ok = true;
 
@@ -319,15 +318,21 @@ async fn proxy_bytes(
             write_to.write_all(&buf[0..len]).await?;
 
             if tracker_ok {
-                if let Err(e) = tracker_channel.send(Ok(bytes::Bytes::copy_from_slice(&buf[..len]))).await {
-                    error!("error sending to tracker: {}", e);
-                    error!("stop tracking.");
+                let bytes = bytes::Bytes::copy_from_slice(&buf[..len]);
+
+                if let Err(e) = tracker_channel.send(Ok(bytes)).await {
+                    error!("error sending to tracker, stop: {}", e);
                     tracker_ok = false;
+
+                    // Let the other side know that we're closed.
+                    let notification = io::Error::new(
+                        io::ErrorKind::UnexpectedEof, "notify channel close");
+                    let _ = notify_channel.send(Err(notification)).await;
                 }
             }
         } else {
             // EOF on read, return Err to signal try_join! to return
-            return Err("EOF".into());
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "EOF"));
         }
     }
 }
@@ -339,7 +344,7 @@ async fn track_messages<F>(
     log_mongo_messages: bool,
     collect_tracing_data: bool,
     mut tracker_fn: F
-) -> Result<(), std::io::Error>
+) -> Result<(), io::Error>
     where F: FnMut(&MsgHeader, &MongoMessage)
 {
     let mut s = stream_reader(rx);
@@ -377,7 +382,7 @@ fn format_client_address(sockaddr: &SocketAddr) -> String {
 }
 
 // Parse the local and remote address pair from provided proxy definition
-fn parse_proxy_addresses(proxy_def: &str) -> Result<(String,String), Box<dyn Error>> {
+fn parse_proxy_addresses(proxy_def: &str) -> Result<(String,String), io::Error> {
     if let Some(pos) = proxy_def.find(':') {
         let (local_port, remote_hostport) = proxy_def.split_at(pos);
         let local_addr = format!("0.0.0.0:{}", local_port);
