@@ -19,6 +19,8 @@ use rustracing::span::SpanContext;
 // Common labels for all op metrics
 const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server"];
 
+// Allow this many server responses to wait for a matching client request
+const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 32;
 
 lazy_static! {
     static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
@@ -429,7 +431,11 @@ impl MongoStatsTracker{
             if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
                 self.observe_server_response_to(&hdr, &msg, &mut client_request);
             } else {
-                outstanding_responses.push((hdr, msg));
+                if outstanding_responses.len() < MAX_OUTSTANDING_SERVER_RESPONSES {
+                    outstanding_responses.push((hdr, msg));
+                } else {
+                    warn!("Too many outstanding server responses: {}", outstanding_responses.len());
+                }
             }
         }
 
