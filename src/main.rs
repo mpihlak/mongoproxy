@@ -271,7 +271,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     tokio::spawn(async move {
         track_messages(server_rx, log_mongo_messages, false, move |hdr, msg| {
             let mut tracker = server_tracker.lock().unwrap();
-            tracker.track_server_response(&hdr, &msg);
+            tracker.track_server_response(hdr, msg);
         }).await?;
         Ok::<(), io::Error>(())
     }.instrument(info_span!("server tracker")));
@@ -345,13 +345,13 @@ async fn track_messages<F>(
     collect_tracing_data: bool,
     mut tracker_fn: F
 ) -> Result<(), io::Error>
-    where F: FnMut(&MsgHeader, &MongoMessage)
+    where F: FnMut(MsgHeader, MongoMessage)
 {
     let mut s = stream_reader(rx);
     loop {
         match MongoMessage::from_reader(&mut s, log_mongo_messages, collect_tracing_data).await {
             Ok((hdr, msg)) => {
-                tracker_fn(&hdr, &msg);
+                tracker_fn(hdr, msg);
             },
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 return Ok(());

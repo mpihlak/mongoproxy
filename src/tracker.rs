@@ -45,6 +45,12 @@ lazy_static! {
             "Number of occurrences where we don't have a matching client request for the response"
             ).unwrap();
 
+    static ref SERVER_RESPONSE_BUFFER_CAPACITY: Gauge =
+        register_gauge!(
+            "mongoproxy_server_response_buffer_capacity_total",
+            "Size of the buffered responses, close to 0 is good"
+            ).unwrap();
+
     static ref RESPONSE_MATCH_HASHMAP_CAPACITY: Gauge =
         register_gauge!(
             "mongoproxy_response_hashmap_capacity_total",
@@ -306,6 +312,7 @@ pub struct MongoStatsTracker {
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
+    server_responses:       Vec<(MsgHeader, MongoMessage)>,
     replicaset:             String,
     server_host:            String,
     app:                    AppConfig,
@@ -331,6 +338,7 @@ impl MongoStatsTracker{
             server_addr: server_addr.to_string(),
             server_addr_sa,
             client_request_map: HashMap::new(),
+            server_responses: Vec::new(),
             client_application: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
@@ -401,7 +409,7 @@ impl MongoStatsTracker{
         [ &self.client_addr, &self.client_application, &req.op, &req.coll, &req.db, &self.replicaset, &self.server_host]
     }
 
-    pub fn track_server_response(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
+    pub fn track_server_response(&mut self, hdr: MsgHeader, msg: MongoMessage) {
         CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
         let span = info_span!("track_server_response");
@@ -412,18 +420,21 @@ impl MongoStatsTracker{
             return;
         }
 
-        if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
-            self.observe_server_response_to(&hdr, msg, &mut client_request);
-            // If the client_request had a span, it will be automatically sent down the
-            // channel as it goes out of scope here.
-        } else {
-            // XXX: Because the processing is asynchronous we might receive a server response
-            // before the client request. Instead of dropping the response we could store it and
-            // process when the matching client request arrives. Timing the requests will be funny
-            // though.
-            RESPONSE_TO_REQUEST_MISMATCH.inc();
-            warn!("response {} not mapped to request", hdr.response_to);
+        self.server_responses.push((hdr, msg));
+
+        // Match the outstanding server responses with the client requests.
+        // Produce a new Vec rather than trying to delete elements.
+        let mut outstanding_responses = Vec::new();
+        while let Some((hdr, msg)) = self.server_responses.pop() {
+            if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
+                self.observe_server_response_to(&hdr, &msg, &mut client_request);
+            } else {
+                outstanding_responses.push((hdr, msg));
+            }
         }
+
+        self.server_responses = outstanding_responses;
+        SERVER_RESPONSE_BUFFER_CAPACITY.set(self.server_responses.capacity() as f64);
     }
 
     fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: &MongoMessage, mut client_request: &mut ClientRequest) {
