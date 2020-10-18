@@ -22,6 +22,9 @@ const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replica
 // Allow this many server responses to wait for a matching client request
 const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 32;
 
+// Allow this many client requests to wait for a matching server response
+const MAX_OUTSTANDING_CLIENT_REQUESTS: usize = 32;
+
 lazy_static! {
     static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -378,6 +381,12 @@ impl MongoStatsTracker{
         // the cleanup.
         self.maybe_kill_cursors(&req.op, &msg);
 
+        // If we're over the limit evict N oldest entries
+        if self.client_request_map.len() >= MAX_OUTSTANDING_CLIENT_REQUESTS {
+            warn!("{} outstanding client requests, evict some to make room.", self.client_request_map.len());
+            // TODO: Actually evict some elements.
+        }
+
         // Keep the client request so that we can keep track to which request
         // a server response belongs to.
         self.client_request_map.insert(hdr.request_id, req);
@@ -407,8 +416,17 @@ impl MongoStatsTracker{
         }
     }
 
+    // Label values for common metrics
     fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 7] {
-        [ &self.client_addr, &self.client_application, &req.op, &req.coll, &req.db, &self.replicaset, &self.server_host]
+        [
+            &self.client_addr,
+            &self.client_application,
+            &req.op,
+            &req.coll,
+            &req.db,
+            &self.replicaset,
+            &self.server_host,
+        ]
     }
 
     pub fn track_server_response(&mut self, hdr: MsgHeader, msg: MongoMessage) {
