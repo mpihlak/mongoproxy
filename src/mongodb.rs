@@ -256,7 +256,13 @@ impl MsgOpMsg {
     ) -> Result<Self>
         where T: AsyncReadExtPlus
     {
-        let flag_bits = rdr.read_u32_le().await?;
+        let flag_bits = match rdr.read_u32_le().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("error on read: {}", e);
+                return Err(e);
+            },
+        };
         debug!("flag_bits={:04x}", flag_bits);
 
         let mut documents = Vec::new();
@@ -296,7 +302,22 @@ impl MsgOpMsg {
                     &mut section_bytes,
                     ).await?;
             } else if kind == 1 {
-                let section_size = rdr.read_u32_le().await? as usize;
+                let section_size = match rdr.read_u32_le().await {
+                    Ok(r) => r,
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                        // This is OK if we've already read at least one doc. In fact
+                        // we're relying on reaching an EOF here to determine when to
+                        // stop parsing.
+                        if documents.is_empty() {
+                            return Err(Error::new(ErrorKind::Other, "EOF reached, but no sections were read"));
+                        }
+                        break;
+                    },
+                    Err(e)  => {
+                        warn!("error on read: {}", e);
+                        return Err(e);
+                    },
+                } as usize;
                 let seq_id = read_cstring(&mut rdr).await?;
                 debug!("kind=1: section_size={}, seq_id={}", section_size, seq_id);
 
@@ -322,7 +343,7 @@ impl MsgOpMsg {
 
         if flag_bits & 1 == 1 {
             // Have checksum, eat it
-            let _checksum = rdr.read_u32().await?;
+            let _checksum = rdr.read_u32().await;
         }
 
         Ok(MsgOpMsg{flag_bits, documents, section_bytes})
