@@ -250,11 +250,13 @@ impl ResponseDocuments for MsgOpMsg {
 
 impl MsgOpMsg {
 
-    pub async fn from_reader(
-        mut rdr: impl AsyncReadExtPlus,
+    pub async fn from_reader<T>(
+        mut rdr: &mut T,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+        where T: AsyncReadExtPlus
+    {
         let flag_bits = rdr.read_u32_le().await?;
         debug!("flag_bits={:04x}", flag_bits);
 
@@ -284,44 +286,41 @@ impl MsgOpMsg {
             // Anyway, we just eat the section headers here and leave the reader pointing
             // to the beginning of a document.
 
-            if kind != 0 {
+            if kind == 0 {
+                debug!("kind=0");
+
+                MsgOpMsg::read_section_document(
+                    &mut rdr,
+                    log_mongo_messages,
+                    collect_tracing_data,
+                    &mut documents,
+                    &mut section_bytes,
+                    ).await?;
+            } else if kind == 1 {
                 let section_size = rdr.read_u32_le().await? as usize;
                 let seq_id = read_cstring(&mut rdr).await?;
                 debug!("kind=1: section_size={}, seq_id={}", section_size, seq_id);
 
-                // Section size includes the size of the cstring and the length bytes, but
-                // does not include the "kind" byte.
-                let _bson_size = section_size - seq_id.len() - 1 - 4;
-                // But we're not going to use it but instead just leave it to the
-                // BSON parser to figure out.
-            } else {
-                debug!("kind=0");
-                // Nothing to do here, reader already at the start of the document
-            }
+                // Section size includes the size of the seq_id cstring and the length bytes, but
+                // does not include the "kind" byte. We take this length of bytes and assume that
+                // it contains zero or more BSON documents.
+                let section_size = section_size - seq_id.len() - 1 - 4;
+                {
+                    let mut rdr = &mut rdr.take(section_size as u64);
 
-            let doc = MONGO_DOC_PARSER.parse_document_keep_bytes(
-                    &mut rdr,
-                    log_mongo_messages | collect_tracing_data).await?;
-            debug!("doc: {}", doc);
-
-            if log_mongo_messages {
-                if let Some(bytes) = doc.get_raw_bytes() {
-                    if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
-                        info!("OP_MSG BSON: {}", doc);
-                    } else {
-                        warn!("OP_MSG BSON parsing failed");
+                    while MsgOpMsg::read_section_document(
+                            &mut rdr,
+                            log_mongo_messages,
+                            collect_tracing_data,
+                            &mut documents,
+                            &mut section_bytes).await?
+                    {
                     }
                 }
+            } else {
+                warn!("uncregonized kind={}", kind);
+                break;
             }
-
-            if collect_tracing_data && (doc.contains_key("comment")
-                    || doc.get_str("op").unwrap_or("") == "killCursors") {
-                if let Some(bytes) = doc.get_raw_bytes() {
-                    section_bytes.push(bytes.clone());
-                }
-            }
-
-            documents.push(doc);
         }
 
         if flag_bits & 1 == 1 {
@@ -330,6 +329,51 @@ impl MsgOpMsg {
         }
 
         Ok(MsgOpMsg{flag_bits, documents, section_bytes})
+    }
+
+    async fn read_section_document(
+        mut rdr: impl AsyncReadExtPlus,
+        log_mongo_messages: bool,
+        collect_tracing_data: bool,
+        documents: &mut Vec<Document>,
+        section_bytes: &mut Vec<Vec<u8>>
+    ) -> Result<bool>
+    {
+        let doc = MONGO_DOC_PARSER.parse_document_keep_bytes(
+                &mut rdr,
+                log_mongo_messages | collect_tracing_data).await;
+        match doc {
+            Ok(doc) => {
+                debug!("doc: {}", doc);
+
+                if log_mongo_messages {
+                    if let Some(bytes) = doc.get_raw_bytes() {
+                        if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
+                            info!("OP_MSG BSON: {}", doc);
+                        } else {
+                            warn!("OP_MSG BSON parsing failed");
+                        }
+                    }
+                }
+
+                if collect_tracing_data && (doc.contains_key("comment")
+                        || doc.get_str("op").unwrap_or("") == "killCursors") {
+                    if let Some(bytes) = doc.get_raw_bytes() {
+                        section_bytes.push(bytes.clone());
+                    }
+                }
+
+                documents.push(doc);
+                return Ok(true);
+            },
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                return Ok(false)
+            },
+            Err(e)  => {
+                warn!("error on read: {}", e);
+                return Err(e);
+            },
+        }
     }
 
     #[allow(dead_code)]
@@ -640,17 +684,31 @@ mod tests {
         doc.to_writer(&mut buf).unwrap();
 
         // Section 1 - first document
-        buf.write_u8(1).unwrap();                       // section type=1
-        buf.write_i32::<LittleEndian>(1234).unwrap();   // section size (ignored in parser)
-        buf.write(b"id0\0").unwrap();                   // id of the section
-        let doc = doc! { format!("y{}", doc_id): "bar" };                  // first document
+        buf.write_u8(1).unwrap();                                           // section type=1
+        let mut doc_buf = Vec::new();
+        let doc = doc! { format!("y{}", doc_id): "bar" };                   // first document
+        doc.to_writer(&mut doc_buf).unwrap();                               // tmp write to get length
+        buf.write_i32::<LittleEndian>(4 + 4 + doc_buf.len() as i32).unwrap();
+        buf.write(b"id0\0").unwrap();                                       // section id
         doc.to_writer(&mut buf).unwrap();
 
-        // Section 1 - second document
-        buf.write_u8(1).unwrap();                       // section type=1
-        buf.write_i32::<LittleEndian>(1234).unwrap();   // section size (ignored in parser)
-        buf.write(b"id1\0").unwrap();                   // id of the section
-        let doc = doc! { format!("z{}", doc_id): "baz" };                  // first document
+        // Section 2 - back to back documents
+        buf.write_u8(1).unwrap();                                           // section type=1
+        let mut doc_buf = Vec::new();
+        let doc = doc! { format!("z{}", doc_id): "baz" };                   // first document
+        doc.to_writer(&mut doc_buf).unwrap();                               // tmp write to get length
+        buf.write_i32::<LittleEndian>(4 + 4 + 2*doc_buf.len() as i32).unwrap();
+        buf.write(b"id1\0").unwrap();                                       // section id
+        doc.to_writer(&mut buf).unwrap();                                   // first doc
+        doc.to_writer(&mut buf).unwrap();                                   // second doc
+
+        // Section 3 - one more to check that we're reading it all
+        buf.write_u8(1).unwrap();                                           // section type=1
+        let mut doc_buf = Vec::new();
+        let doc = doc! { format!("b{}", doc_id): "brr" };                   // first document
+        doc.to_writer(&mut doc_buf).unwrap();                               // tmp write to get length
+        buf.write_i32::<LittleEndian>(4 + 4 + doc_buf.len() as i32).unwrap();
+        buf.write(b"id2\0").unwrap();                                       // section id
         doc.to_writer(&mut buf).unwrap();
     }
 
@@ -659,14 +717,16 @@ mod tests {
         let mut buf = Vec::new();
         msgop_to_buf(0, &mut buf);
 
-        let msg = MsgOpMsg::from_reader(&buf[..], false, false).await.unwrap();
+        let msg = MsgOpMsg::from_reader(&mut &buf[..], false, false).await.unwrap();
 
         assert_eq!(0, msg.flag_bits);
-        assert_eq!(3, msg.documents.len());
+        assert_eq!(5, msg.documents.len());
         assert_eq!(0, msg.section_bytes.len());
         assert_eq!("x0", msg.documents[0].get_str("op").unwrap());
         assert_eq!("y0", msg.documents[1].get_str("op").unwrap());
         assert_eq!("z0", msg.documents[2].get_str("op").unwrap());
+        assert_eq!("z0", msg.documents[3].get_str("op").unwrap());
+        assert_eq!("b0", msg.documents[4].get_str("op").unwrap());
     }
 
     #[tokio::test]
@@ -690,7 +750,7 @@ mod tests {
             0x69, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        let msg = MsgOpMsg::from_reader(&buf[..], true, true).await.unwrap();
+        let msg = MsgOpMsg::from_reader(&mut &buf[..], true, true).await.unwrap();
 
         assert_eq!(0, msg.flag_bits);
         assert_eq!(2, msg.documents.len());
