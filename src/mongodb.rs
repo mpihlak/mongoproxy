@@ -315,7 +315,7 @@ impl MsgOpMsg {
                     &mut section_bytes
                 ).await?  {}
             } else {
-                warn!("uncregonized kind={}", kind);
+                warn!("unrecognized kind={}", kind);
                 break;
             }
         }
