@@ -3,7 +3,6 @@ use tracing::{error, warn, info, debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, Document, read_cstring};
 use prometheus::{CounterVec};
-use bson;
 
 use std::io::{Write, Error, ErrorKind};
 use tokio::io::{self, AsyncReadExt, Result};
@@ -270,7 +269,7 @@ impl MsgOpMsg {
                     // This is OK if we've already read at least one doc. In fact
                     // we're relying on reaching an EOF here to determine when to
                     // stop parsing.
-                    if documents.len() == 0 {
+                    if documents.is_empty() {
                         return Err(Error::new(ErrorKind::Other, "EOF reached, but no sections were read"));
                     }
                     break;
@@ -289,7 +288,7 @@ impl MsgOpMsg {
             if kind == 0 {
                 debug!("kind=0");
 
-                MsgOpMsg::read_section_document(
+                MsgOpMsg::process_section_document(
                     &mut rdr,
                     log_mongo_messages,
                     collect_tracing_data,
@@ -305,18 +304,16 @@ impl MsgOpMsg {
                 // does not include the "kind" byte. We take this length of bytes and assume that
                 // it contains zero or more BSON documents.
                 let section_size = section_size - seq_id.len() - 1 - 4;
-                {
-                    let mut rdr = &mut rdr.take(section_size as u64);
 
-                    while MsgOpMsg::read_section_document(
-                            &mut rdr,
-                            log_mongo_messages,
-                            collect_tracing_data,
-                            &mut documents,
-                            &mut section_bytes).await?
-                    {
-                    }
-                }
+                // Consume all the documents in the section, but no more.
+                let mut rdr = &mut rdr.take(section_size as u64);
+                while MsgOpMsg::process_section_document(
+                    &mut rdr,
+                    log_mongo_messages,
+                    collect_tracing_data,
+                    &mut documents,
+                    &mut section_bytes
+                ).await?  {}
             } else {
                 warn!("uncregonized kind={}", kind);
                 break;
@@ -331,7 +328,7 @@ impl MsgOpMsg {
         Ok(MsgOpMsg{flag_bits, documents, section_bytes})
     }
 
-    async fn read_section_document(
+    async fn process_section_document(
         mut rdr: impl AsyncReadExtPlus,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
@@ -364,14 +361,14 @@ impl MsgOpMsg {
                 }
 
                 documents.push(doc);
-                return Ok(true);
+                Ok(true)
             },
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                return Ok(false)
+                Ok(false)
             },
             Err(e)  => {
                 warn!("error on read: {}", e);
-                return Err(e);
+                Err(e)
             },
         }
     }

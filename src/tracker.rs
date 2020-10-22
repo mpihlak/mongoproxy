@@ -448,12 +448,10 @@ impl MongoStatsTracker{
         while let Some((hdr, msg)) = self.server_responses.pop() {
             if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
                 self.observe_server_response_to(&hdr, &msg, &mut client_request);
+            } else if outstanding_responses.len() < MAX_OUTSTANDING_SERVER_RESPONSES {
+                outstanding_responses.push((hdr, msg));
             } else {
-                if outstanding_responses.len() < MAX_OUTSTANDING_SERVER_RESPONSES {
-                    outstanding_responses.push((hdr, msg));
-                } else {
-                    warn!("Too many outstanding server responses: {}", outstanding_responses.len());
-                }
+                warn!("Too many outstanding server responses: {}", outstanding_responses.len());
             }
         }
 
