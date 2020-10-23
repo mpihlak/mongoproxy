@@ -20,7 +20,7 @@ use rustracing::span::SpanContext;
 const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server"];
 
 // Allow this many server responses to wait for a matching client request
-const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 32;
+const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 1024;
 
 // Allow this many client requests to wait for a matching server response
 const MAX_OUTSTANDING_CLIENT_REQUESTS: usize = 32;
@@ -440,10 +440,12 @@ impl MongoStatsTracker{
             return;
         }
 
-        self.server_responses.push((hdr, msg));
+        // Match the outstanding server responses with the client requests. Since we're
+        // processing the requests and responses concurrently, it can happen that the
+        // response gets tracked before the request. So we make an attempt to buffer them
+        // for awhile.
 
-        // Match the outstanding server responses with the client requests.
-        // Produce a new Vec rather than trying to delete elements.
+        self.server_responses.push((hdr, msg));
         let mut outstanding_responses = Vec::new();
         while let Some((hdr, msg)) = self.server_responses.pop() {
             if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
