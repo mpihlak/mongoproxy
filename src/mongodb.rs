@@ -119,7 +119,8 @@ impl MongoMessage {
         debug!("have header: {}", hdr);
 
         // Take only as much as promised in the header.
-        let mut rdr = rdr.take((hdr.message_length - HEADER_LENGTH) as u64);
+        let message_length = (hdr.message_length - HEADER_LENGTH) as u64;
+        let mut rdr = rdr.take(message_length);
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
@@ -127,7 +128,8 @@ impl MongoMessage {
                 hdr.op_code,
                 &mut rdr,
                 log_mongo_messages,
-                collect_tracing_data).await {
+                collect_tracing_data,
+                message_length).await {
             Ok(msg) => msg,
             Err(e) => {
                 error!("Failed to parse MongoDb {} message: {}", hdr.op_code, e);
@@ -150,6 +152,7 @@ impl MongoMessage {
         mut rdr: impl AsyncReadExtPlus,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
+        message_length: u64,
     ) -> Result<MongoMessage> {
         let msg = match op {
                1 => MongoMessage::Reply(MsgOpReply::from_reader(&mut rdr, log_mongo_messages).await?),
@@ -159,8 +162,12 @@ impl MongoMessage {
             2006 => MongoMessage::Delete(MsgOpDelete::from_reader(&mut rdr).await?),
             2002 => MongoMessage::Insert(MsgOpInsert::from_reader(&mut rdr).await?),
             2012 => MongoMessage::Compressed(MsgOpCompressed::from_reader(&mut rdr).await?),
-            2013 => MongoMessage::Msg(MsgOpMsg::from_reader(&mut rdr,
-                        log_mongo_messages, collect_tracing_data).await?),
+            2013 => MongoMessage::Msg(MsgOpMsg::from_reader(
+                        &mut rdr,
+                        log_mongo_messages,
+                        collect_tracing_data,
+                        message_length,
+                    ).await?),
             2010 | 2011 => {
                 // This is an undocumented legacy protocol that some clients (bad Robo3T)
                 // still use. We ignore it.
@@ -249,16 +256,52 @@ impl ResponseDocuments for MsgOpMsg {
 
 impl MsgOpMsg {
 
+    // Construct a new OP_MSG message from a reader. This requires the length of the whole
+    // message to be passed in to simplify handling of the optional checksum.
     pub async fn from_reader<T>(
-        mut rdr: &mut T,
+        rdr: &mut T,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
+        message_length: u64,
     ) -> Result<Self>
         where T: AsyncReadExtPlus
     {
         let flag_bits = rdr.read_u32_le().await?;
         debug!("flag_bits={:04x}", flag_bits);
 
+        let body_length = if flag_bits & 1 == 1 {
+            message_length - 4 - 4      // Subtract flags and checksum bytes
+        } else {
+            message_length - 4          // Subtract just the flags
+        };
+
+        let msg = {
+            let mut rdr = rdr.take(body_length);
+            MsgOpMsg::read_body(&mut rdr, flag_bits, log_mongo_messages, collect_tracing_data).await?
+        };
+
+        if flag_bits & 1 == 1 {
+            let _checksum = rdr.read_u32_le().await?;
+        }
+
+        Ok(msg)
+    }
+
+    // Read the body of the message, processing all the sections but leaving the checksum
+    // for the caller.
+    //
+    // Note: This is a separate function to work around an angry borrow checker when we
+    // take from the `rdr` and later try to use it. I'm sure there's an idiomatic way around
+    // this but I just haven't found it.
+    //
+    async fn read_body<T>(
+        mut rdr: &mut T,
+        flag_bits: u32,
+        log_mongo_messages: bool,
+        collect_tracing_data: bool,
+    ) -> Result<Self>
+        where T: AsyncReadExtPlus
+    {
         let mut documents = Vec::new();
         let mut section_bytes = Vec::new();
 
@@ -318,11 +361,6 @@ impl MsgOpMsg {
                 warn!("unrecognized kind={}", kind);
                 break;
             }
-        }
-
-        if flag_bits & 1 == 1 {
-            // Have checksum, eat it
-            let _checksum = rdr.read_u32().await?;
         }
 
         Ok(MsgOpMsg{flag_bits, documents, section_bytes})
@@ -714,7 +752,7 @@ mod tests {
         let mut buf = Vec::new();
         msgop_to_buf(0, &mut buf);
 
-        let msg = MsgOpMsg::from_reader(&mut &buf[..], false, false).await.unwrap();
+        let msg = MsgOpMsg::from_reader(&mut &buf[..], false, false, buf.len() as u64).await.unwrap();
 
         assert_eq!(0, msg.flag_bits);
         assert_eq!(5, msg.documents.len());
@@ -747,7 +785,7 @@ mod tests {
             0x69, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        let msg = MsgOpMsg::from_reader(&mut &buf[..], true, true).await.unwrap();
+        let msg = MsgOpMsg::from_reader(&mut &buf[..], true, true, buf.len() as u64).await.unwrap();
 
         assert_eq!(0, msg.flag_bits);
         assert_eq!(2, msg.documents.len());
@@ -767,12 +805,16 @@ mod tests {
             0x00, 0x00, 0x00, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x00, 0x00, 0xf7, 0x20, 0xde, 0xbf,
         ];
 
-        let msg = MsgOpMsg::from_reader(&mut &buf[..], true, true).await.unwrap();
-
-        assert_eq!(1, msg.flag_bits);
-        assert_eq!(1, msg.documents.len());
-        assert_eq!(1, msg.section_bytes.len());
-        assert_eq!(0x65, msg.section_bytes[0].len());
+        match MsgOpMsg::from_reader(&mut &buf[..], true, true, buf.len() as u64).await {
+            Ok(msg) => {
+                assert_eq!(1, msg.flag_bits);
+                assert_eq!(1, msg.documents.len());
+                assert_eq!("listDatabases", msg.documents[0].get_str("op").unwrap());
+            },
+            Err(e) => {
+                panic!("Message parsing failed: {}", e);
+            },
+        }
     }
 
     #[tokio::test]
