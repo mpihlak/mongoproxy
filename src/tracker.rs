@@ -20,10 +20,10 @@ use rustracing::span::SpanContext;
 const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server"];
 
 // Allow this many server responses to wait for a matching client request
-const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 1024;
+const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 16384;
 
 // Allow this many client requests to wait for a matching server response
-const MAX_OUTSTANDING_CLIENT_REQUESTS: usize = 32;
+const MAX_OUTSTANDING_CLIENT_REQUESTS: usize = 16384;
 
 lazy_static! {
     static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
@@ -50,16 +50,28 @@ lazy_static! {
             "Number of occurrences where we don't have a matching client request for the response"
             ).unwrap();
 
-    static ref SERVER_RESPONSE_BUFFER_CAPACITY: Gauge =
+    static ref SERVER_RESPONSE_HASHMAP_SIZE: Gauge =
         register_gauge!(
-            "mongoproxy_server_response_buffer_capacity_total",
+            "mongoproxy_server_response_hashmap_size_total",
             "Size of the buffered responses, close to 0 is good"
             ).unwrap();
 
-    static ref RESPONSE_MATCH_HASHMAP_CAPACITY: Gauge =
+    static ref SERVER_RESPONSE_HASHMAP_FLUSHES: Gauge =
         register_gauge!(
-            "mongoproxy_response_hashmap_capacity_total",
+            "mongoproxy_server_response_hashmap_flushes_total",
+            "Number of times the response hashmap was flushed to make room"
+            ).unwrap();
+
+    static ref CLIENT_REQUEST_HASHMAP_SIZE: Gauge =
+        register_gauge!(
+            "mongoproxy_client_request_hashmap_size_total",
             "Response to request mapping HashMap size"
+            ).unwrap();
+
+    static ref CLIENT_REQUEST_HASHMAP_FLUSHES: Gauge =
+        register_gauge!(
+            "mongoproxy_client_request_hashmap_flushes_total",
+            "Number of times the request hashmap was flushed to make room"
             ).unwrap();
 
     static ref CURSOR_TRACE_PARENT_HASHMAP_CAPACITY: Gauge =
@@ -317,7 +329,7 @@ pub struct MongoStatsTracker {
     client_addr:            String,
     client_application:     String,
     client_request_map:     HashMap<u32, ClientRequest>,
-    server_responses:       Vec<(MsgHeader, MongoMessage)>,
+    server_response_map:    HashMap<u32, (MsgHeader, MongoMessage)>,
     replicaset:             String,
     server_host:            String,
     app:                    AppConfig,
@@ -343,7 +355,7 @@ impl MongoStatsTracker{
             server_addr: server_addr.to_string(),
             server_addr_sa,
             client_request_map: HashMap::new(),
-            server_responses: Vec::new(),
+            server_response_map: HashMap::new(),
             client_application: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
@@ -375,7 +387,7 @@ impl MongoStatsTracker{
             }
         }
 
-        let req = ClientRequest::from(&self, hdr.message_length, &msg);
+        let mut req = ClientRequest::from(&self, hdr.message_length, &msg);
 
         // If we're tracking cursors for tracing purposes then also handle
         // the cleanup.
@@ -384,14 +396,20 @@ impl MongoStatsTracker{
         // If we're over the limit evict N oldest entries
         if self.client_request_map.len() >= MAX_OUTSTANDING_CLIENT_REQUESTS {
             warn!("{} outstanding client requests, evict some to make room.", self.client_request_map.len());
-            // TODO: Actually evict some elements.
+            self.client_request_map.clear();
+            CLIENT_REQUEST_HASHMAP_FLUSHES.inc();
         }
 
-        // Keep the client request so that we can keep track to which request
-        // a server response belongs to.
-        self.client_request_map.insert(hdr.request_id, req);
+        // See if there's a server response already waiting for this request. Due to concurrency
+        // these occasionally show up before the request, so deal with that. Otherwise set the
+        // client request aside so that it'll be processed when the response arrives.
+        if let Some((hdr, msg)) = self.server_response_map.remove(&hdr.response_to) {
+            self.observe_server_response_to(&hdr, &msg, &mut req);
+        } else {
+            self.client_request_map.insert(hdr.request_id, req);
+        }
 
-        RESPONSE_MATCH_HASHMAP_CAPACITY.set(self.client_request_map.capacity() as f64);
+        CLIENT_REQUEST_HASHMAP_SIZE.set(self.client_request_map.len() as f64);
     }
 
     // Handle "killCursors" to clean up the trace parent hash map
@@ -440,25 +458,20 @@ impl MongoStatsTracker{
             return;
         }
 
-        // Match the outstanding server responses with the client requests. Since we're
-        // processing the requests and responses concurrently, it can happen that the
-        // response gets tracked before the request. So we make an attempt to buffer them
-        // for awhile.
+        // If the request is already here, process the response immediately. Otherwise
+        // put it aside so that it will processed later when the client request arrives.
 
-        self.server_responses.push((hdr, msg));
-        let mut outstanding_responses = Vec::new();
-        while let Some((hdr, msg)) = self.server_responses.pop() {
-            if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
-                self.observe_server_response_to(&hdr, &msg, &mut client_request);
-            } else if outstanding_responses.len() < MAX_OUTSTANDING_SERVER_RESPONSES {
-                outstanding_responses.push((hdr, msg));
-            } else {
-                warn!("Too many outstanding server responses: {}", outstanding_responses.len());
-            }
+        if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
+            self.observe_server_response_to(&hdr, &msg, &mut client_request);
+        } else if self.server_response_map.len() < MAX_OUTSTANDING_SERVER_RESPONSES {
+            self.server_response_map.insert(hdr.request_id, (hdr, msg));
+        } else {
+            warn!("Too many outstanding server responses: {}", self.server_response_map.len());
+            self.server_response_map.clear();
+            SERVER_RESPONSE_HASHMAP_FLUSHES.inc();
         }
 
-        self.server_responses = outstanding_responses;
-        SERVER_RESPONSE_BUFFER_CAPACITY.set(self.server_responses.capacity() as f64);
+        SERVER_RESPONSE_HASHMAP_SIZE.set(self.server_response_map.len() as f64);
     }
 
     fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: &MongoMessage, mut client_request: &mut ClientRequest) {
