@@ -20,10 +20,10 @@ use rustracing::span::SpanContext;
 const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server"];
 
 // Allow this many server responses to wait for a matching client request
-const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 16384;
+const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 1024;
 
 // Allow this many client requests to wait for a matching server response
-const MAX_OUTSTANDING_CLIENT_REQUESTS: usize = 16384;
+const MAX_OUTSTANDING_CLIENT_REQUESTS: usize = 1024;
 
 lazy_static! {
     static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
@@ -395,7 +395,7 @@ impl MongoStatsTracker{
 
         // If we're over the limit evict N oldest entries
         if self.client_request_map.len() >= MAX_OUTSTANDING_CLIENT_REQUESTS {
-            warn!("{} outstanding client requests, evict some to make room.", self.client_request_map.len());
+            warn!("{} outstanding client requests, flushing.", self.client_request_map.len());
             self.client_request_map.clear();
             CLIENT_REQUEST_HASHMAP_FLUSHES.inc();
         }
@@ -465,7 +465,7 @@ impl MongoStatsTracker{
         } else if self.server_response_map.len() < MAX_OUTSTANDING_SERVER_RESPONSES {
             self.server_response_map.insert(hdr.response_to, (hdr, msg));
         } else {
-            warn!("Too many outstanding server responses: {}", self.server_response_map.len());
+            warn!("{} outstanding server responses, flushing.", self.server_response_map.len());
             self.server_response_map.clear();
             SERVER_RESPONSE_HASHMAP_FLUSHES.inc();
         }
