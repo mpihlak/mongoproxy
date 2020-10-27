@@ -400,10 +400,9 @@ impl MongoStatsTracker{
             CLIENT_REQUEST_HASHMAP_FLUSHES.inc();
         }
 
-        // See if there's a server response already waiting for this request. Due to concurrency
-        // these occasionally show up before the request, so deal with that. Otherwise set the
-        // client request aside so that it'll be processed when the response arrives.
-        if let Some((hdr, msg)) = self.server_response_map.remove(&hdr.response_to) {
+        // Sometimes the requests and responses arrive out of order. Deal with that
+        // by checking for any "unresolved" responses here.
+        if let Some((hdr, msg)) = self.server_response_map.remove(&hdr.request_id) {
             self.observe_server_response_to(&hdr, &msg, &mut req);
         } else {
             self.client_request_map.insert(hdr.request_id, req);
@@ -464,7 +463,7 @@ impl MongoStatsTracker{
         if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
             self.observe_server_response_to(&hdr, &msg, &mut client_request);
         } else if self.server_response_map.len() < MAX_OUTSTANDING_SERVER_RESPONSES {
-            self.server_response_map.insert(hdr.request_id, (hdr, msg));
+            self.server_response_map.insert(hdr.response_to, (hdr, msg));
         } else {
             warn!("Too many outstanding server responses: {}", self.server_response_map.len());
             self.server_response_map.clear();
