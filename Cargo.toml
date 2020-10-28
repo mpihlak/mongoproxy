@@ -5,7 +5,7 @@ authors = ["mpihlak <martin.pihlak@starship.co>"]
 edition = "2018"
 
 [profile.release]
-debug = false
+debug = true
 
 [dependencies]
 byteorder = '1.3'
