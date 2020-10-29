@@ -475,6 +475,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "isatty"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31a8281fc93ec9693494da65fbf28c0c2aa60a2eaec25dc58e2f31952e95edc"
+dependencies = [
+ "cfg-if 0.1.10",
+ "libc",
+ "redox_syscall",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "itoa"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -636,6 +648,7 @@ dependencies = [
  "bytes",
  "clap",
  "crossbeam-channel",
+ "isatty",
  "lazy_static",
  "libc",
  "prometheus",

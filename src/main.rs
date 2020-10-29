@@ -111,6 +111,7 @@ async fn main() {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)
         .with_env_filter(EnvFilter::from_default_env())
+        .with_ansi(isatty::stdout_isatty())
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)
