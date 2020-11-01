@@ -1,7 +1,8 @@
+use std::convert::Infallible;
 use std::sync::{Arc,Mutex};
 use std::net::{SocketAddr,ToSocketAddrs};
 use std::io;
-use std::{thread, str};
+use std::str;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, stream_reader};
 use tokio::net::{TcpListener,TcpStream};
@@ -15,7 +16,11 @@ use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use lazy_static::lazy_static;
 
 #[macro_use] extern crate prometheus;
-#[macro_use] extern crate rouille;
+
+use hyper::{
+    service::{make_service_fn, service_fn},
+    Body, Method, Request, Response, Server, StatusCode,
+};
 
 use mongoproxy::jaeger_tracing;
 use mongoproxy::dstaddr;
@@ -119,7 +124,8 @@ async fn main() {
 
     info!("MongoProxy v{}", crate_version!());
 
-    start_admin_listener(&admin_addr);
+    start_admin_listener(&admin_addr)
+        .expect("failed to start admin listener");
     info!("Admin endpoint at http://{}", admin_addr);
 
     let proxy_spec = matches.value_of("proxy").unwrap();
@@ -394,28 +400,44 @@ fn parse_proxy_addresses(proxy_def: &str) -> Result<(String,String), io::Error> 
     }
 }
 
-pub fn start_admin_listener(endpoint: &str) {
-    let endpoint = endpoint.to_owned();
-    thread::spawn(||
-        rouille::start_server(endpoint, move |request| {
-            router!(request,
-                (GET) (/) => {
-                    rouille::Response::html(
-                        "<a href='/metrics'>metrics</a>\n<br>\n\
-                         <a href='/health'>health</a>\n")
-                },
-                (GET) (/health) => {
-                    rouille::Response::text("OK")
-                },
-                (GET) (/metrics) => {
-                    let encoder = TextEncoder::new();
-                    let metric_families = prometheus::gather();
-                    let mut buffer = vec![];
-                    encoder.encode(&metric_families, &mut buffer).unwrap();
-                    rouille::Response::from_data("text/plain", buffer)
-                },
-                _ => rouille::Response::empty_404()
-            )
-        })
-    );
+async fn serve_admin_req(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    let mut response = Response::new(Body::empty());
+
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/") => {
+            *response.body_mut() = Body::from("/");
+        },
+        (&Method::GET, "/health") => {
+            *response.body_mut() = Body::from("OK");
+        },
+        (&Method::GET, "/metrics") => {
+            let encoder = TextEncoder::new();
+            let metric_families = prometheus::gather();
+            let mut buffer = vec![];
+            encoder.encode(&metric_families, &mut buffer).unwrap();
+
+            *response.body_mut() = Body::from(buffer);
+        },
+        _ => {
+            *response.status_mut() = StatusCode::NOT_FOUND;
+        },
+    };
+
+    Ok(response)
+}
+
+pub fn start_admin_listener(endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let endpoint = endpoint.to_string();
+    let addr: SocketAddr = endpoint.parse()?;
+
+    tokio::spawn(async move {
+        Server::bind(&addr)
+            .serve(make_service_fn(|_conn| async {
+                Ok::<_, Infallible>(service_fn(serve_admin_req))
+            }))
+            .await?;
+        Ok::<(), hyper::Error>(())
+    });
+
+    Ok(())
 }
