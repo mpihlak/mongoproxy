@@ -391,8 +391,7 @@ impl MsgOpMsg {
                     }
                 }
 
-                if collect_tracing_data && (doc.contains_key("comment")
-                        || doc.get_str("op").unwrap_or("") == "killCursors") {
+                if collect_tracing_data {
                     if let Some(bytes) = doc.get_raw_bytes() {
                         section_bytes.push(bytes.clone());
                     }
@@ -766,6 +765,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_op_msg_raw() {
+        // This is an OP_MSG that contains a "delete" operation with payloads of type 0 and 1
+        // (total of 2 BSON documents).
         let buf = vec![
             0x00, 0x00, 0x00, 0x00, 0x00, 0x7d, 0x00, 0x00, 0x00, 0x02, 0x64, 0x65, 0x6c, 0x65, 0x74, 0x65,
             0x00, 0x08, 0x00, 0x00, 0x00, 0x6b, 0x69, 0x74, 0x74, 0x65, 0x6e, 0x73, 0x00, 0x08, 0x6f, 0x72,
@@ -789,7 +790,7 @@ mod tests {
 
         assert_eq!(0, msg.flag_bits);
         assert_eq!(2, msg.documents.len());
-        assert_eq!(1, msg.section_bytes.len());
+        assert_eq!(2, msg.section_bytes.len());
         assert_eq!(0x69, msg.section_bytes[0].len());
     }
 

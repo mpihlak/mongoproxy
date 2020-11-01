@@ -1,4 +1,4 @@
-use crate::mongodb::{MsgHeader,MongoMessage,ResponseDocuments};
+use crate::mongodb::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
 use crate::jaeger_tracing;
 use crate::appconfig::{AppConfig};
 
@@ -8,13 +8,12 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn, info_span};
 use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
 
+use opentelemetry::api::trace::{Tracer, SpanReference, SpanKind};
+use opentelemetry::api::trace::Span as _Span;
+use opentelemetry::sdk::trace::Span;
+use opentelemetry::api::KeyValue;
+
 use async_bson::Document;
-
-use rustracing::span::Span;
-use rustracing::tag::Tag;
-use rustracing_jaeger::span::{SpanContextState};
-use rustracing::span::SpanContext;
-
 
 // Common labels for all op metrics
 const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server"];
@@ -75,10 +74,10 @@ lazy_static! {
             ).unwrap();
 
     static ref CURSOR_TRACE_PARENT_HASHMAP_CAPACITY: Gauge =
-    register_gauge!(
-        "mongoproxy_cursor_trace_hashmap_capacity_total",
-        "Cursor trace parent mapping HashMap size"
-        ).unwrap();
+        register_gauge!(
+            "mongoproxy_cursor_trace_hashmap_capacity_total",
+            "Cursor trace parent mapping HashMap size"
+            ).unwrap();
 
     static ref SERVER_RESPONSE_LATENCY_SECONDS: HistogramVec =
         register_histogram_vec!(
@@ -109,11 +108,11 @@ lazy_static! {
             vec![128.0, 1024.0, 16384.0, 131_072.0, 1_048_576.0]).unwrap();
 
     static ref CLIENT_REQUEST_SIZE_TOTAL: HistogramVec =
-    register_histogram_vec!(
-        "mongoproxy_client_request_bytes_total",
-        "Size of the client request",
-        OP_LABELS,
-        vec![128.0, 1024.0, 16384.0, 131_072.0, 1_048_576.0]).unwrap();
+        register_histogram_vec!(
+            "mongoproxy_client_request_bytes_total",
+            "Size of the client request",
+            OP_LABELS,
+            vec![128.0, 1024.0, 16384.0, 131_072.0, 1_048_576.0]).unwrap();
 
     static ref SERVER_RESPONSE_ERRORS_TOTAL: CounterVec =
         register_counter_vec!(
@@ -146,10 +145,11 @@ lazy_static! {
 }
 
 // Map cursors to their parent traces. Keyed by server hostport and cursor id.
+// We're storing the parent traces in their serialized form (TextMap -> HashMap)
 //
 // XXX: If the cursor id's are not unique within a MongoDb instance then there's
 // a risk of collision if there are multiple databases on the same server.
-pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), Vec<u8>>;
+pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), SpanReference>;
 
 
 // Stripped down version of the client request. We need this mostly for timing
@@ -160,7 +160,7 @@ struct ClientRequest {
     db: String,
     coll: String,
     cursor_id: i64,
-    span: Option<Span<SpanContextState>>,
+    span: Option<Span>,
     message_length: usize,
 }
 
@@ -178,8 +178,12 @@ impl ClientRequest {
                 // Go and loop through all the documents in the msg and see if we
                 // find an operation that we know. There might be multiple documents
                 // in the message but we assume that only one of them contains an actual op.
+                //
+                // Note: In most cases we want to look at "Type 0" payloads here, except sometimes
+                // mongo puts $comment fields into "Type 1" payloads and then we'd miss out on
+                // tracing.
                 for s in m.documents.iter() {
-                    if op == "" {
+                    if op.is_empty() {
                         if let Some(opname) = s.get_str("op") {
                             op = opname.to_owned();
                             if MONGODB_COLLECTION_OPS.contains(opname) {
@@ -206,63 +210,10 @@ impl ClientRequest {
                         }
                     }
 
-                    if let Some(tracer) = &tracker.app.tracer {
-                        // If this is a getMore operation then it will not have a client provided
-                        // trace id. Instead we need follow from the span that was created by the
-                        // initial "find" or "aggregate" operation.
-                        if op == "getMore" {
-                            if let Some(cursor) = s.get_i64("op_value") {
-                                cursor_id = cursor;
-                                let trace_mapper = tracker.app.trace_mapper.lock().unwrap();
-
-                                if let Some(parent_span_id) = trace_mapper.get(&(tracker.server_addr_sa, cursor_id)) {
-                                    if let Ok(Some(parent)) = SpanContext::extract_from_binary(&mut &parent_span_id[..]) {
-                                        span = Some(tracer
-                                            .span(op.to_owned())
-                                            .child_of(&parent)
-                                            .start());
-                                        debug!("Created a new span for getMore: cursor_id={} parent={:?}", cursor_id, parent);
-                                    } else {
-                                        debug!("extract_from_binary failed for cursor_id={} data={:?}", cursor_id, parent_span_id);
-                                    }
-                                } else {
-                                    debug!("Parent span not found for cursor_id={}", cursor_id);
-                                }
-                            }
-                        } else if let Some(comm) = s.get_str("comment") {
-                            debug!("Have a comment field: {}", comm);
-                            match jaeger_tracing::extract_from_text(comm) {
-                                Ok(Some(parent)) => {
-                                    debug!("Extracted trace header: {:?}", parent);
-                                    let mut new_span = tracer
-                                        .span(op.to_owned())
-                                        .child_of(&parent)
-                                        .tag(Tag::new("app", tracker.client_application.clone()))
-                                        .tag(Tag::new("client", tracker.client_addr.clone()))
-                                        .tag(Tag::new("server", tracker.server_addr.clone()))
-                                        .tag(Tag::new("collection", coll.to_owned()))
-                                        .tag(Tag::new("db", db.to_owned()))
-                                        .tag(Tag::new("op", op.to_owned()))
-                                        .start();
-
-                                    for bytes in m.section_bytes.iter() {
-                                        if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
-                                            // Use the first key in the document as key name
-                                            let doc_first_key = doc.keys().next().unwrap_or(&op);
-                                            new_span.set_tag(|| Tag::new(
-                                                doc_first_key.to_owned(),
-                                                format!("{:.8192}", doc.to_string())));
-                                        }
-                                    }
-
-                                    debug!("Created a new span for {}: parent={:?}", op, parent);
-                                    span = Some(new_span)
-                                },
-                                other => {
-                                    debug!("No trace id found in the comment: {:?}", other);
-                                },
-                            }
-                        }
+                    if let Some((ok_cursor_id, ok_span)) = ClientRequest::maybe_create_span(
+                            &tracker, &m, &db, &coll, &op, &s) {
+                        cursor_id = ok_cursor_id;
+                        span = Some(ok_span);
                     }
                 }
             },
@@ -316,6 +267,99 @@ impl ClientRequest {
             span,
             message_length,
         }
+    }
+
+    // For OP_MSG messages try creating distributed tracing spans. For the initial span the parent
+    // trace id is extracted from the $comment field of the query. For following cursor fetches we
+    // need to keep store the trace id in a hashmap, keyed by cursor id.
+    //
+    fn maybe_create_span(
+        tracker: &MongoStatsTracker,
+        msg: &MsgOpMsg,
+        db: &str,
+        coll: &str,
+        op: &str,
+        doc: &Document,
+    ) -> Option<(i64, Span)> {
+
+        let tracer = match &tracker.app.tracer {
+            Some(t) => t,
+            _ => return None,
+        };
+
+        if op == "getMore" {
+            // getMore operations will not have a client provided trace id. Instead we need follow
+            // from the span that was created by the initial "find" or "aggregate" operation. So
+            // we look that up from a table and follow from that.
+
+            if let Some(cursor) = doc.get_i64("op_value") {
+                let trace_mapper = tracker.app.trace_mapper.lock().unwrap();
+
+                // Look up the text representation of the parent span
+                let parent_trace_ref = match trace_mapper.get(&(tracker.server_addr_sa, cursor)) {
+                    Some(parent_trace_id) => parent_trace_id,
+                    _ => {
+                        debug!("Parent span not found for cursor_id={}", cursor);
+                        return None;
+                    },
+                };
+
+                // Because we don't have a cursor id here, we can't store the span in the
+                // trace_mapper just yet. Unfortunately we only get the cursor id in the response
+                // document of the first "find", so that's where we put add it to the trace_mapper.
+
+                let span = tracer.span_builder(op)
+                    .with_parent(parent_trace_ref.clone())
+                    .with_kind(SpanKind::Server)
+                    .start(tracer);
+                debug!("Started getMore span: {:?}", span.span_reference());
+
+                return Some((cursor, span));
+            }
+        } else if let Some(comment) = doc.get_str("comment") {
+            // Otherwise we look up the parent trace id from the $comment field of
+            // the query.
+
+            let parent = match jaeger_tracing::extract_from_text(comment) {
+                Some(parent) => parent,
+                _ => {
+                    debug!("No trace id found in $comment");
+                    return None
+                },
+            };
+
+            debug!("Extracted trace header: {:?}", parent);
+            let span = tracer
+                .span_builder(op)
+                .with_parent(parent.clone())
+                .with_kind(SpanKind::Server)
+                .with_attributes(vec![
+                    KeyValue::new("db.mongodb.collection", coll.to_owned()),
+                    KeyValue::new("db.name", db.to_owned()),
+                    KeyValue::new("db.operation", op.to_owned()),
+                    KeyValue::new("db.client.addr", tracker.client_addr.clone()),
+                    KeyValue::new("db.server.addr", tracker.server_addr.clone()),
+                    KeyValue::new("db.client.app", tracker.client_application.clone()),
+                ])
+                .start(tracer);
+            debug!("Started initial span: {:?}", span.span_reference());
+
+            // Tag the span with all the documents in the message. This will give
+            // us the query payload, delete query, etc.
+            for bytes in msg.section_bytes.iter() {
+                if let Ok(doc) = bson::Document::from_reader(&mut &bytes[..]) {
+                    // Use the first key in the document as key name
+                    if let Some(doc_first_key) = doc.keys().next() {
+                        span.set_attribute(KeyValue::new(
+                                format!("db.operation.{}", doc_first_key),
+                                format!("{:.8192}", doc.to_string())));
+                    }
+                }
+            }
+
+            return Some((0, span));
+        }
+        None
     }
 
     fn is_collection_op(&self) -> bool {
@@ -473,7 +517,12 @@ impl MongoStatsTracker{
         SERVER_RESPONSE_HASHMAP_SIZE.set(self.server_response_map.len() as f64);
     }
 
-    fn observe_server_response_to(&mut self, hdr: &MsgHeader, msg: &MongoMessage, mut client_request: &mut ClientRequest) {
+    fn observe_server_response_to(
+        &mut self,
+        hdr: &MsgHeader,
+        msg: &MongoMessage,
+        mut client_request: &mut ClientRequest,
+    ) {
         if client_request.is_collection_op() {
             SERVER_RESPONSE_LATENCY_SECONDS
                 .with_label_values(&self.label_values(&client_request))
@@ -516,9 +565,7 @@ impl MongoStatsTracker{
             if let Some(ok) = section.get_float("ok") {
                 if ok == 0.0 {
                     if let Some(span) = &mut client_request.span {
-                        span.set_tag(|| {
-                            Tag::new("error", true)
-                        });
+                        span.set_attribute(KeyValue::new("error", true));
                     }
                     SERVER_RESPONSE_ERRORS_TOTAL
                         .with_label_values(&self.label_values(&client_request))
@@ -549,7 +596,7 @@ impl MongoStatsTracker{
 
             if let Some(n) = n_docs_returned {
                 if let Some(span) = &mut client_request.span {
-                    span.set_tag(|| Tag::new("documents_returned", n as i64));
+                    span.set_attribute(KeyValue::new("documents_returned", n as i64));
                 }
                 if client_request.is_collection_op() {
                     DOCUMENTS_RETURNED_TOTAL
@@ -560,7 +607,7 @@ impl MongoStatsTracker{
 
             if let Some(n) = n_docs_changed {
                 if let Some(span) = &mut client_request.span {
-                    span.set_tag(|| Tag::new("documents_changed", n as i64));
+                    span.set_attribute(KeyValue::new("documents_changed", n as i64));
                 }
                 if client_request.is_collection_op() {
                     DOCUMENTS_CHANGED_TOTAL
@@ -569,7 +616,7 @@ impl MongoStatsTracker{
                 }
             }
 
-            // Handle the span creation for the cursor operations.
+            // Span management for the cursor operations.
             if let Some(cursor_id) = section.get_i64("cursor_id") {
                 if cursor_id == 0 {
                     // So this is the last batch in this cursor, we need to remove the parent trace
@@ -586,10 +633,13 @@ impl MongoStatsTracker{
                         CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
                     }
                 } else if client_request.op == "find" || client_request.op == "aggregate" {
-                    // This is a first call of a cursor operation. We take it's trace
-                    // span id and associate it with cursor id so that subsequent getMore
-                    // operations can follow spans from it. Note that we want the actual
-                    // parent span to go out of scope here, so that it gets reported promptly.
+                    // This is a response to the first call of a cursor operation. If it was traced
+                    // we take the requests span span id and associate it with cursor id so that
+                    // subsequent getMore operations can follow spans from it.
+                    //
+                    // Note that we will let the actual parent span to go out of scope after
+                    // observing it so that the span gets reported promptly. Thus we don't
+                    // store the actual span in the hashmap, but just it's trace_id.
                     //
                     // Note: For a find() operation without limit, MongoDb will not immediately
                     // close the cursor even if the find immediately returns all the documents.
@@ -599,16 +649,11 @@ impl MongoStatsTracker{
                     // XXX: If the application never does a getMore we will be leaking some.
                     //
                     if let Some(span) = &client_request.span {
-                        if let Some(ctx) = span.context() {
-                            let mut trace_id = Vec::new();
-                            if ctx.inject_to_binary(&mut trace_id).is_ok() {
-                                debug!("Saving parent trace for server_addr={} cursor_id={}", self.server_addr_sa, cursor_id);
-                                let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
+                        debug!("Saving parent trace for cursor_id={}", cursor_id);
+                        let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
-                                trace_mapper.insert((self.server_addr_sa, cursor_id), trace_id);
-                                CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
-                            }
-                        }
+                        trace_mapper.insert((self.server_addr_sa, cursor_id), span.span_reference());
+                        CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
                     }
                 } else if client_request.op != "getMore" {
                     warn!("operation={}, but cursor_id is set: {}", client_request.op, cursor_id);

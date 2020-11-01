@@ -131,8 +131,10 @@ async fn main() {
     let proxy_spec = matches.value_of("proxy").unwrap();
     let (local_hostport, remote_hostport) = parse_proxy_addresses(proxy_spec).unwrap();
 
+    let (tracer, _uninstall) = jaeger_tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr);
+
     let app = AppConfig::new(
-        jaeger_tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr),
+        tracer,
         log_mongo_messages,
     );
 
@@ -144,7 +146,7 @@ async fn main() {
         if enable_jaeger { "true" } else { "false" } ],
     ).inc();
 
-    run_accept_loop(local_hostport, remote_hostport, &app).await;
+    run_accept_loop(local_hostport, remote_hostport, app).await;
 }
 
 // Accept connections in a loop and spawn a task to proxy them. If remote address is not explicitly
@@ -152,7 +154,7 @@ async fn main() {
 // option.
 //
 // Never returns.
-async fn run_accept_loop(local_addr: String, remote_addr: String, app: &AppConfig)
+async fn run_accept_loop(local_addr: String, remote_addr: String, app: AppConfig)
 {
     if remote_addr.is_empty() {
         info!("Proxying {} -> <original dst>", local_addr);

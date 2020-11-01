@@ -1,7 +1,7 @@
 use std::sync::{Arc,Mutex};
 
-use crate::jaeger_tracing::{Tracer};
-use crate::tracker::{CursorTraceMapper};
+use crate::jaeger_tracing::Tracer;
+use crate::tracker::CursorTraceMapper;
 
 #[derive(Clone,Debug)]
 pub struct AppConfig {

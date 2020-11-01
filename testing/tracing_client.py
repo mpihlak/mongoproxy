@@ -75,6 +75,12 @@ if __name__ == "__main__":
             for r in coll.find({"name": "x" * 1024*16}).comment(span_text):
                 pass
 
+        print("Update")
+        with tracer.start_span('Update', root_span) as span:
+            span_text = span_as_text(span)
+            coll.update_many({ "name": "Purry", "$comment": span_text },
+                            { "$set": { "foo": 1 } })
+
         print("Aggregate query")
         with tracer.start_span('Aggregate fetch', root_span) as span:
             span_text = span_as_text(span)
