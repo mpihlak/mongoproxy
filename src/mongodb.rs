@@ -791,7 +791,8 @@ mod tests {
         assert_eq!(0, msg.flag_bits);
         assert_eq!(2, msg.documents.len());
         assert_eq!(2, msg.section_bytes.len());
-        assert_eq!(0x69, msg.section_bytes[0].len());
+        assert_eq!(0x7d, msg.section_bytes[0].len());
+        assert_eq!(0x69, msg.section_bytes[1].len());
     }
 
     #[tokio::test]
