@@ -43,12 +43,6 @@ lazy_static! {
             "Number of unrecognized op names in MongoDb response",
             &["op"]).unwrap();
 
-    static ref RESPONSE_TO_REQUEST_MISMATCH: Counter =
-        register_counter!(
-            "mongoproxy_response_to_request_id_mismatch",
-            "Number of occurrences where we don't have a matching client request for the response"
-            ).unwrap();
-
     static ref SERVER_RESPONSE_HASHMAP_SIZE: Gauge =
         register_gauge!(
             "mongoproxy_server_response_hashmap_size_total",
@@ -144,8 +138,9 @@ lazy_static! {
         "aggregate", "distinct"].iter().cloned().collect();
 }
 
-// Map cursors to their parent traces. Keyed by server hostport and cursor id.
-// We're storing the parent traces in their serialized form (TextMap -> HashMap)
+// Since "getMore" doesn't have an attached trace id we need a way to look up the parent trace for
+// them. So we need to keep around the SpanReferences for the initial operation and look them up
+// by the server hostport and cursor id.
 //
 // XXX: If the cursor id's are not unique within a MongoDb instance then there's
 // a risk of collision if there are multiple databases on the same server.

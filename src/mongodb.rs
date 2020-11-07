@@ -290,6 +290,9 @@ impl MsgOpMsg {
     // Read the body of the message, processing all the sections but leaving the checksum
     // for the caller.
     //
+    // For a detailed description of OP_MSG messages, see:
+    // https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#id1
+    //
     // Note: This is a separate function to work around an angry borrow checker when we
     // take from the `rdr` and later try to use it. I'm sure there's an idiomatic way around
     // this but I just haven't found it.
@@ -322,11 +325,6 @@ impl MsgOpMsg {
                     return Err(e);
                 },
             };
-
-            // This business with the sections is described at:
-            // https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#id1
-            // Anyway, we just eat the section headers here and leave the reader pointing
-            // to the beginning of a document.
 
             if kind == 0 {
                 debug!("kind=0");
