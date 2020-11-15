@@ -6,7 +6,7 @@ use std::time::{Instant};
 use std::collections::{HashMap, HashSet};
 
 use tracing::{debug, warn, info_span};
-use prometheus::{Counter,CounterVec,HistogramVec,Gauge};
+use prometheus::{CounterVec,HistogramVec,Gauge};
 
 use opentelemetry::api::trace::{Tracer, SpanReference, SpanKind};
 use opentelemetry::api::trace::Span as _Span;
