@@ -113,8 +113,10 @@ async fn main() {
     let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
     let jaeger_addr = lookup_address(matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR)).unwrap();
 
+    let (writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)
+        .with_writer(writer)
         .with_env_filter(EnvFilter::from_default_env())
         .with_ansi(isatty::stdout_isatty())
         .finish();
