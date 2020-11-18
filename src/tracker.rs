@@ -591,7 +591,7 @@ impl MongoStatsTracker{
 
             if let Some(n) = n_docs_returned {
                 if let Some(span) = &mut client_request.span {
-                    span.set_attribute(KeyValue::new("documents_returned", n as i64));
+                    span.set_attribute(KeyValue::new("db.documents_returned", n as i64));
                 }
                 if client_request.is_collection_op() {
                     DOCUMENTS_RETURNED_TOTAL
@@ -602,7 +602,7 @@ impl MongoStatsTracker{
 
             if let Some(n) = n_docs_changed {
                 if let Some(span) = &mut client_request.span {
-                    span.set_attribute(KeyValue::new("documents_changed", n as i64));
+                    span.set_attribute(KeyValue::new("db.documents_changed", n as i64));
                 }
                 if client_request.is_collection_op() {
                     DOCUMENTS_CHANGED_TOTAL
