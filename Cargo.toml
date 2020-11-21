@@ -16,7 +16,7 @@ clap = '2.33'
 libc = '0.2'
 bson = '1.1'
 tokio = { version = "0.2.22", features = ["rt-threaded", "net", "tcp", "macros", "io-util", "sync", "stream" ] }
-async-bson = { git = "https://github.com/mpihlak/async-bson" }
+async-bson = { git = "https://github.com/mpihlak/async-bson", tag = "v0.2.0" }
 bytes = '0.5'
 tracing = "0.1"
 tracing-subscriber = "0.2"
