@@ -29,23 +29,11 @@ dependencies = [
 
 [[package]]
 name = "async-bson"
-version = "0.2.0"
-source = "git+https://github.com/mpihlak/async-bson?tag=v0.2.0#d6894236a9869796670216c6b4f5422e98e2575a"
+version = "0.2.2"
+source = "git+https://github.com/mpihlak/async-bson?tag=v0.2.2#cec472ce3e527b3fd3a09f149a4ec3824ebc8d67"
 dependencies = [
- "async-recursion",
+ "maybe-async",
  "tokio",
- "tracing",
-]
-
-[[package]]
-name = "async-recursion"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5444eec77a9ec2bfe4524139e09195862e981400c4358d3b760cae634e4c4ee"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -522,6 +510,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f099785f7595cc4b4553a174ce30dd7589ef93391ff414dbb67f62392b9e0ce1"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "maybe-async"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd1afac51d14f8056cd544c83239b961c464e0a98c2ca65353195df93e636a20"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

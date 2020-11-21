@@ -1,7 +1,7 @@
 use std::fmt;
 use tracing::{error, warn, info, debug};
 use byteorder::{LittleEndian, WriteBytesExt};
-use async_bson::{DocumentParser, Document, read_cstring};
+use async_bson::{DocumentParser, DocumentReader, Document, read_cstring};
 use prometheus::{CounterVec};
 
 use std::io::{Write, Error, ErrorKind};
@@ -10,8 +10,6 @@ use tokio::io::{self, AsyncReadExt, Result};
 
 pub const HEADER_LENGTH: usize = 16;
 
-pub trait AsyncReadExtPlus: AsyncReadExt+Unpin+Send {}
-impl <T>AsyncReadExtPlus for T where T: AsyncReadExt+Unpin+Send {}
 
 lazy_static! {
     static ref MONGO_DOC_PARSER: DocumentParser<'static> =
@@ -106,7 +104,7 @@ impl fmt::Display for MongoMessage {
 impl MongoMessage {
 
     pub async fn from_reader(
-        mut rdr: impl AsyncReadExtPlus,
+        mut rdr: impl DocumentReader,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
     ) -> Result<(MsgHeader, MongoMessage)> {
@@ -149,7 +147,7 @@ impl MongoMessage {
     // Extract a message or return an error
     async fn extract_message(
         op: u32,
-        mut rdr: impl AsyncReadExtPlus,
+        mut rdr: impl DocumentReader,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
         message_length: u64,
@@ -202,7 +200,7 @@ impl MsgHeader {
         }
     }
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let message_length  = rdr.read_u32_le().await? as usize;
         let request_id      = rdr.read_u32_le().await?;
         let response_to     = rdr.read_u32_le().await?;
@@ -264,7 +262,7 @@ impl MsgOpMsg {
         collect_tracing_data: bool,
         message_length: u64,
     ) -> Result<Self>
-        where T: AsyncReadExtPlus
+        where T: DocumentReader
     {
         let flag_bits = rdr.read_u32_le().await?;
         debug!("flag_bits={:04x}", flag_bits);
@@ -303,7 +301,7 @@ impl MsgOpMsg {
         log_mongo_messages: bool,
         collect_tracing_data: bool,
     ) -> Result<Self>
-        where T: AsyncReadExtPlus
+        where T: DocumentReader
     {
         let mut documents = Vec::new();
         let mut section_bytes = Vec::new();
@@ -365,7 +363,7 @@ impl MsgOpMsg {
     }
 
     async fn process_section_document(
-        mut rdr: impl AsyncReadExtPlus,
+        mut rdr: impl DocumentReader,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
         documents: &mut Vec<Document>,
@@ -447,7 +445,7 @@ impl fmt::Display for MsgOpQuery {
 
 impl MsgOpQuery {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus, log_mongo_messages: bool) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl DocumentReader, log_mongo_messages: bool) -> Result<Self> {
         let flags  = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
         let number_to_skip = rdr.read_i32_le().await?;
@@ -484,7 +482,7 @@ impl fmt::Display for MsgOpGetMore {
 
 impl MsgOpGetMore {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let _zero = rdr.read_i32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
         let number_to_return = rdr.read_i32_le().await?;
@@ -511,7 +509,7 @@ impl fmt::Display for MsgOpUpdate {
 
 impl MsgOpUpdate {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let _zero = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
         let flags = rdr.read_u32_le().await?;
@@ -538,7 +536,7 @@ impl fmt::Display for MsgOpDelete {
 
 impl MsgOpDelete {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let _zero = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
         let flags = rdr.read_u32_le().await?;
@@ -562,7 +560,7 @@ impl fmt::Display for MsgOpInsert {
 }
 
 impl MsgOpInsert {
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let flags = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
 
@@ -600,7 +598,7 @@ impl ResponseDocuments for MsgOpReply {
 
 impl MsgOpReply {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus, log_mongo_messages: bool) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl DocumentReader, log_mongo_messages: bool) -> Result<Self> {
         let flags  = rdr.read_u32_le().await?;
         let cursor_id = rdr.read_u64_le().await?;
         let starting_from = rdr.read_u32_le().await?;
@@ -643,7 +641,7 @@ impl fmt::Display for MsgOpCompressed {
 
 impl MsgOpCompressed {
 
-    pub async fn from_reader(mut rdr: impl AsyncReadExtPlus) -> Result<Self> {
+    pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let original_op = rdr.read_i32_le().await?;
         let uncompressed_size = rdr.read_i32_le().await?;
         let compressor_id = rdr.read_u8().await?;
