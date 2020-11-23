@@ -1,0 +1,13 @@
+[package]
+name = "envoy-wasm"
+version = "0.1.0"
+authors = ["mpihlak <martin.pihlak@starship.co>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+proxy-wasm = "0.1.2"
+log = "0.4"
+mongodb = { path="../mongodb" }

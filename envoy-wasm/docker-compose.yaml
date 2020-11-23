@@ -1,0 +1,26 @@
+version: "3"
+services:
+  envoy:
+    container_name: envoy
+    image: istio/proxyv2:1.5.0
+    entrypoint:
+      - /usr/local/bin/envoy
+      - -c
+      - /etc/envoy.yaml
+      - -l
+      - info
+      - --service-cluster
+      - proxy
+    ports:
+      - "8001:8001"
+      - "27111:27111"
+    volumes:
+      - ${PWD}/envoy.yaml:/etc/envoy.yaml
+      - ${PWD}/target/wasm32-unknown-unknown/debug/envoy_wasm.wasm:/usr/local/lib/mongoproxy.wasm
+  mongodb:
+    container_name: mongo
+    image: mongo
+    logging:
+      driver: none
+    ports:
+      - "27017:27017"
