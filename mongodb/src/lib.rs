@@ -2,11 +2,21 @@ use std::fmt;
 use tracing::{error, warn, info, debug};
 use byteorder::{LittleEndian, WriteBytesExt};
 use async_bson::{DocumentParser, DocumentReader, Document, read_cstring};
+use lazy_static::lazy_static;
+
+#[cfg(feature="is_sync")]
+use {
+    std::io,
+    byteorder::ReadBytesExt,
+};
+
+#[cfg(not(feature="is_sync"))]
+use tokio::io;
+
+use std::io::{Result, Write, Error, ErrorKind};
+
+#[macro_use] extern crate prometheus;
 use prometheus::{CounterVec};
-
-use std::io::{Write, Error, ErrorKind};
-use tokio::io::{self, AsyncReadExt, Result};
-
 
 pub const HEADER_LENGTH: usize = 16;
 
@@ -103,6 +113,7 @@ impl fmt::Display for MongoMessage {
 
 impl MongoMessage {
 
+    #[maybe_async::maybe_async]
     pub async fn from_reader(
         mut rdr: impl DocumentReader,
         log_mongo_messages: bool,
@@ -136,7 +147,7 @@ impl MongoMessage {
             }
         };
 
-        let len = io::copy(&mut rdr, &mut tokio::io::sink()).await?;
+        let len = io::copy(&mut rdr, &mut io::sink()).await?;
         if len > 0 {
             warn!("partial message, sinking {} bytes.", len);
         }
@@ -145,6 +156,7 @@ impl MongoMessage {
     }
 
     // Extract a message or return an error
+    #[maybe_async::maybe_async]
     async fn extract_message(
         op: u32,
         mut rdr: impl DocumentReader,
@@ -200,6 +212,7 @@ impl MsgHeader {
         }
     }
 
+    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let message_length  = rdr.read_u32_le().await? as usize;
         let request_id      = rdr.read_u32_le().await?;
@@ -256,6 +269,7 @@ impl MsgOpMsg {
 
     // Construct a new OP_MSG message from a reader. This requires the length of the whole
     // message to be passed in to simplify handling of the optional checksum.
+    #[maybe_async::maybe_async]
     pub async fn from_reader<T>(
         rdr: &mut T,
         log_mongo_messages: bool,
@@ -295,6 +309,7 @@ impl MsgOpMsg {
     // take from the `rdr` and later try to use it. I'm sure there's an idiomatic way around
     // this but I just haven't found it.
     //
+    #[maybe_async::maybe_async]
     async fn read_body<T>(
         mut rdr: &mut T,
         flag_bits: u32,
@@ -362,6 +377,7 @@ impl MsgOpMsg {
         Ok(MsgOpMsg{flag_bits, documents, section_bytes})
     }
 
+    #[maybe_async::maybe_async]
     async fn process_section_document(
         mut rdr: impl DocumentReader,
         log_mongo_messages: bool,
@@ -445,6 +461,7 @@ impl fmt::Display for MsgOpQuery {
 
 impl MsgOpQuery {
 
+    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader, log_mongo_messages: bool) -> Result<Self> {
         let flags  = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
@@ -482,6 +499,7 @@ impl fmt::Display for MsgOpGetMore {
 
 impl MsgOpGetMore {
 
+    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let _zero = rdr.read_i32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
@@ -509,6 +527,7 @@ impl fmt::Display for MsgOpUpdate {
 
 impl MsgOpUpdate {
 
+    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let _zero = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
@@ -536,6 +555,7 @@ impl fmt::Display for MsgOpDelete {
 
 impl MsgOpDelete {
 
+    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let _zero = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
@@ -560,6 +580,7 @@ impl fmt::Display for MsgOpInsert {
 }
 
 impl MsgOpInsert {
+    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let flags = rdr.read_u32_le().await?;
         let full_collection_name = read_cstring(&mut rdr).await?;
@@ -598,6 +619,7 @@ impl ResponseDocuments for MsgOpReply {
 
 impl MsgOpReply {
 
+    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader, log_mongo_messages: bool) -> Result<Self> {
         let flags  = rdr.read_u32_le().await?;
         let cursor_id = rdr.read_u64_le().await?;
@@ -641,6 +663,7 @@ impl fmt::Display for MsgOpCompressed {
 
 impl MsgOpCompressed {
 
+    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
         let original_op = rdr.read_i32_le().await?;
         let uncompressed_size = rdr.read_i32_le().await?;
