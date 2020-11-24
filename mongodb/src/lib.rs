@@ -11,7 +11,7 @@ use {
 };
 
 #[cfg(not(feature="is_sync"))]
-use tokio::io;
+use tokio::io::{self, AsyncReadExt};
 
 use std::io::{Result, Write, Error, ErrorKind};
 
