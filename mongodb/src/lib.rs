@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 
 #[cfg(feature="is_sync")]
 use {
-    std::io,
+    std::io::{self, Cursor},
     byteorder::ReadBytesExt,
 };
 
@@ -385,8 +385,10 @@ impl MsgOpMsg {
                     let mut buf = vec![0u8; section_size];
                     rdr.read_exact(&mut buf[..]).await?;
 
+                    let mut cur = Cursor::new(buf);
+
                     while MsgOpMsg::process_section_document(
-                        &mut &buf[..],
+                        &mut cur,
                         log_mongo_messages,
                         collect_tracing_data,
                         &mut documents,
@@ -734,7 +736,7 @@ mod tests {
     use byteorder::{LittleEndian, WriteBytesExt};
     use bson::doc;
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_header() {
         let hdr = MsgHeader {
             message_length: 100,
@@ -790,7 +792,7 @@ mod tests {
         doc.to_writer(&mut buf).unwrap();
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_op_msg() {
         let mut buf = Vec::new();
         msgop_to_buf(0, &mut buf);
@@ -807,7 +809,7 @@ mod tests {
         assert_eq!("b0", msg.documents[4].get_str("op").unwrap());
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_op_msg_raw() {
         // This is an OP_MSG that contains a "delete" operation with payloads of type 0 and 1
         // (total of 2 BSON documents).
@@ -839,7 +841,7 @@ mod tests {
         assert_eq!(0x69, msg.section_bytes[1].len());
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_checksummed_message() {
         let buf = vec![
             0x01, 0x00, 0x00, 0x00, 0x00, 0x65, 0x00, 0x00, 0x00, 0x10, 0x6c, 0x69, 0x73, 0x74, 0x44, 0x61,
@@ -863,7 +865,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_op_query() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(0i32).unwrap();   // flag bits
@@ -882,7 +884,7 @@ mod tests {
         assert_eq!("ok", msg.query.get_str("comment").unwrap());
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_op_getmore() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(0).unwrap();      // zero
@@ -896,7 +898,7 @@ mod tests {
         assert_eq!(123456, msg.cursor_id);
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_op_update() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(0).unwrap();      // zero
@@ -914,7 +916,7 @@ mod tests {
         assert_eq!("b", msg.update.get_str("op").unwrap());
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_op_delete() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(0).unwrap();      // zero
@@ -929,7 +931,7 @@ mod tests {
         assert_eq!("a", msg.selector.get_str("op").unwrap());
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_op_insert() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(123).unwrap();    // flags
@@ -940,7 +942,7 @@ mod tests {
         assert_eq!("tribbles", msg.full_collection_name);
     }
 
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_op_reply() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(123).unwrap();    // flags
@@ -962,7 +964,7 @@ mod tests {
     }
 
     // Test parsing multiple back to back messages
-    #[tokio::test]
+    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
     async fn test_parse_multiple_message() {
         let mut buf = Vec::new();
 
