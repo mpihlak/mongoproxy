@@ -287,9 +287,17 @@ impl MsgOpMsg {
             message_length - 4          // Subtract just the flags
         };
 
+        #[cfg(feature="is_async")]
         let msg = {
             let mut rdr = rdr.take(body_length);
             MsgOpMsg::read_body(&mut rdr, flag_bits, log_mongo_messages, collect_tracing_data).await?
+        };
+        #[cfg(not(feature="is_async"))]
+        let msg = {
+            let mut buf = vec![0u8; body_length as usize];
+            rdr.read_exact(&mut buf[..]).await?;
+
+            MsgOpMsg::read_body(&mut &buf[..], flag_bits, log_mongo_messages, collect_tracing_data).await?
         };
 
         if flag_bits & 1 == 1 {
@@ -360,14 +368,31 @@ impl MsgOpMsg {
                 let section_size = section_size - seq_id.len() - 1 - 4;
 
                 // Consume all the documents in the section, but no more.
-                let mut rdr = &mut rdr.take(section_size as u64);
-                while MsgOpMsg::process_section_document(
-                    &mut rdr,
-                    log_mongo_messages,
-                    collect_tracing_data,
-                    &mut documents,
-                    &mut section_bytes
-                ).await?  {}
+                #[cfg(not(feature="is_sync"))]
+                {
+                    let mut rdr = &mut rdr.take(section_size as u64);
+                    while MsgOpMsg::process_section_document(
+                        &mut rdr,
+                        log_mongo_messages,
+                        collect_tracing_data,
+                        &mut documents,
+                        &mut section_bytes
+                    ).await?  {}
+                }
+
+                #[cfg(feature="is_sync")]
+                {
+                    let mut buf = vec![0u8; section_size];
+                    rdr.read_exact(&mut buf[..]).await?;
+
+                    while MsgOpMsg::process_section_document(
+                        &mut &buf[..],
+                        log_mongo_messages,
+                        collect_tracing_data,
+                        &mut documents,
+                        &mut section_bytes
+                    ).await?  {}
+                }
             } else {
                 warn!("unrecognized kind={}", kind);
                 break;
