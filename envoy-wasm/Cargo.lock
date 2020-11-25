@@ -11,6 +11,7 @@ name = "async-bson"
 version = "0.2.3"
 source = "git+https://github.com/mpihlak/async-bson?tag=v0.2.3#a9bd794a071d4b1f4e40dd628e75d18b03c70103"
 dependencies = [
+ "byteorder",
  "maybe-async",
  "tokio",
 ]

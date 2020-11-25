@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 [dependencies]
 proxy-wasm = "0.1.2"
 log = "0.4"
-mongodb = { path="../mongodb" }
+mongodb = { path="../mongodb", features = ["is_sync"] }
