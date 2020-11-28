@@ -5,5 +5,9 @@ members = [
     "mongo-protocol",
 ]
 
+# WASM library depends on sync version of async-bson and mongo-protocol,
+# so exclude it from the workspace to avoid build errors.
+exclude = [ "envoy-wasm" ]
+
 [profile.release]
 debug = true
