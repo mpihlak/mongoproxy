@@ -10,4 +10,10 @@ crate-type = ["cdylib"]
 [dependencies]
 proxy-wasm = "0.1.2"
 log = "0.4"
+bson = "1.1"
 mongodb = { path="../mongodb", features = ["is_sync"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tracing-subscriber = "0.2"
+lazy_static = '1.4'
