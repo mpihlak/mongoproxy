@@ -1,4 +1,4 @@
-use crate::mongodb::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
+use mongodb::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
 use crate::jaeger_tracing;
 use crate::appconfig::{AppConfig};
 
@@ -206,7 +206,7 @@ impl ClientRequest {
                     }
 
                     if let Some((ok_cursor_id, ok_span)) = ClientRequest::maybe_create_span(
-                            &tracker, &m, &db, &coll, &op, &s) {
+                            &tracker, &m, &db, &coll, &op, s) {
                         cursor_id = ok_cursor_id;
                         span = Some(ok_span);
                     }

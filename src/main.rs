@@ -26,7 +26,8 @@ use mongoproxy::jaeger_tracing;
 use mongoproxy::dstaddr;
 use mongoproxy::appconfig::{AppConfig};
 use mongoproxy::tracker::{MongoStatsTracker};
-use mongoproxy::mongodb::{MsgHeader, MongoMessage};
+
+use mongodb::{MsgHeader, MongoMessage};
 
 
 type BufBytes = Result<bytes::Bytes, io::Error>;
