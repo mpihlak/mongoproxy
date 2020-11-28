@@ -1,4 +1,4 @@
-use mongodb::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
+use mongo_protocol::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
 use crate::jaeger_tracing;
 use crate::appconfig::{AppConfig};
 

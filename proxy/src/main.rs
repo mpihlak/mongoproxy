@@ -27,7 +27,7 @@ use mongoproxy::dstaddr;
 use mongoproxy::appconfig::{AppConfig};
 use mongoproxy::tracker::{MongoStatsTracker};
 
-use mongodb::{MsgHeader, MongoMessage};
+use mongo_protocol::{MsgHeader, MongoMessage};
 
 
 type BufBytes = Result<bytes::Bytes, io::Error>;

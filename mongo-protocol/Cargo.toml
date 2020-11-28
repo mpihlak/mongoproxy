@@ -1,5 +1,5 @@
 [package]
-name = "mongodb"
+name = "mongo-protocol"
 version = "0.1.0"
 authors = ["mpihlak <martin.pihlak@starship.co>"]
 edition = "2018"
