@@ -157,7 +157,7 @@ impl MongoMessage {
 
     // Extract a message or return an error
     #[maybe_async::maybe_async]
-    async fn extract_message(
+    pub async fn extract_message(
         op: u32,
         mut rdr: impl DocumentReader,
         log_mongo_messages: bool,
@@ -287,12 +287,12 @@ impl MsgOpMsg {
             message_length - 4          // Subtract just the flags
         };
 
-        #[cfg(feature="is_async")]
+        #[cfg(not(feature="is_sync"))]
         let msg = {
             let mut rdr = rdr.take(body_length);
             MsgOpMsg::read_body(&mut rdr, flag_bits, log_mongo_messages, collect_tracing_data).await?
         };
-        #[cfg(not(feature="is_async"))]
+        #[cfg(feature="is_sync")]
         let msg = {
             let mut buf = vec![0u8; body_length as usize];
             rdr.read_exact(&mut buf[..]).await?;
