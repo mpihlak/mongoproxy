@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::sync::Once;
 
 use mongodb::{MsgHeader, MongoMessage};
 use tracing::{trace};
@@ -94,6 +93,7 @@ mod tests {
     use bson::doc;
     use mongodb::{MsgOpMsg};
     use tracing_subscriber::{FmtSubscriber, EnvFilter};
+    use std::sync::Once;
 
     static INIT: Once = Once::new();
 

@@ -16,4 +16,3 @@ tracing = "0.1"
 
 [dev-dependencies]
 tracing-subscriber = "0.2"
-lazy_static = '1.4'
