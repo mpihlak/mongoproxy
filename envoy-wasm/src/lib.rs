@@ -74,12 +74,10 @@ impl StreamContext for MongoDbFilter {
     }
 
     // When we receive something from the "client"
-    fn on_downstream_data(&mut self, data_size: usize, end_of_stream: bool) -> Action {
-        info!("ctx {}: Downstream data: data_size={}, end={}", self.context_id, data_size, end_of_stream);
+    fn on_downstream_data(&mut self, data_size: usize, _end_of_stream: bool) -> Action {
         if let Some(data) = self.get_downstream_data(0, data_size) {
-            //info!("ctx {}: data\n{}\n", self.context_id, debug_fmt(&data));
             for (hdr, msg) in self.get_messages(data) {
-                info!("From downstream:\nhdr: {:?}\nmsg: {:?}\n", hdr, msg);
+                //info!("From downstream:\nhdr: {:?}\nmsg: {:?}\n", hdr, msg);
                 if let Err(e) = increment_metric(self.counter, 1) {
                     warn!("Metric inc error for {}: {:?}", self.counter, e);
                 }
@@ -96,12 +94,10 @@ impl StreamContext for MongoDbFilter {
     }
 
     // When we receive something from the "server"
-    fn on_upstream_data(&mut self, data_size: usize, end_of_stream: bool) -> Action {
-        info!("ctx {}: Upstream data: data_size={}, end={}", self.context_id, data_size, end_of_stream);
+    fn on_upstream_data(&mut self, data_size: usize, _end_of_stream: bool) -> Action {
         if let Some(data) = self.get_upstream_data(0, data_size) {
-            // info!("ctx {}: data\n{}\n", self.context_id, debug_fmt(&data));
             for (hdr, msg) in self.get_messages(data) {
-                info!("From upstream:\nhdr: {:?}\nmsg: {:?}\n", hdr, msg);
+                //info!("From upstream:\nhdr: {:?}\nmsg: {:?}\n", hdr, msg);
             }
         } else {
             info!("ctx {}: no data :(", self.context_id);
