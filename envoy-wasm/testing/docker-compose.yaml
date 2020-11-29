@@ -19,7 +19,7 @@ services:
       - ${PWD}/../target/wasm32-unknown-unknown/release/envoy_wasm.wasm:/usr/local/lib/mongoproxy.wasm
   mongoproxy:
     container_name: mongoproxy
-    image: mpihlak/mongoproxy:v0.5.3
+    image: mongoproxy:latest
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info
