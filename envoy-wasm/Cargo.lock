@@ -318,6 +318,7 @@ checksum = "da78e04bc0e40f36df43ecc6575e4f4b180e8156c4efd73f13d5619479b05696"
 [[package]]
 name = "proxy-wasm"
 version = "0.1.2"
+source = "git+https://github.com/proxy-wasm/proxy-wasm-rust-sdk#4cb2db7e398fb8166f49fcc899ef5ede261005d1"
 dependencies = [
  "hashbrown",
  "log",

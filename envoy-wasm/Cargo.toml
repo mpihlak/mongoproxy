@@ -8,11 +8,11 @@ edition = "2018"
 crate-type = ["cdylib"]
 
 [dependencies]
-proxy-wasm = { path = "../../random-stuff/proxy-wasm-rust-sdk" }
 log = "0.4"
 bson = "1.1"
-mongo-protocol = { path="../mongo-protocol", features = ["is_sync"] }
 tracing = "0.1"
+proxy-wasm = { git = "https://github.com/proxy-wasm/proxy-wasm-rust-sdk" }
+mongo-protocol = { path="../mongo-protocol", features = ["is_sync"] }
 
 [dev-dependencies]
 tracing-subscriber = "0.2"
