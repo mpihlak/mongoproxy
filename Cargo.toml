@@ -11,4 +11,4 @@ members = [
 exclude = [ "envoy-wasm" ]
 
 [profile.release]
-debug = true
+debug = false
