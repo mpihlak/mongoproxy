@@ -30,7 +30,7 @@ use mongoproxy::tracker::{MongoStatsTracker};
 use mongo_protocol::{MsgHeader, MongoMessage};
 
 
-type BufBytes = Result<bytes::Bytes, io::Error>;
+type BufBytes = Result<bytes::BytesMut, io::Error>;
 
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
 const ADMIN_PORT: &str = "9898";
@@ -321,18 +321,16 @@ async fn proxy_bytes(
 ) -> Result<(), io::Error>
 {
     let mut tracker_ok = true;
-    let mut buf = [0; 16384];
 
     loop {
-        let len = read_from.read(&mut buf).await?;
+        let mut buf = bytes::BytesMut::with_capacity(131072);
+        let len = read_from.read_buf(&mut buf).await?;
 
         if len > 0 {
             write_to.write_all(&buf[0..len]).await?;
 
             if tracker_ok {
-                let bytes = bytes::Bytes::copy_from_slice(&buf[..len]);
-
-                if let Err(e) = tracker_channel.send(Ok(bytes)).await {
+                if let Err(e) = tracker_channel.send(Ok(buf)).await {
                     error!("error sending to tracker, stop: {}", e);
                     tracker_ok = false;
 
