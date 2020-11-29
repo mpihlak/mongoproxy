@@ -19,9 +19,9 @@ The metrics support in proxy-wasm Rust SDK is not stable as of yet, so we pull t
 Defining metrics is relatively straightforward, however with labels it gets a little bit more
 trickier. Envoy expects labels to be part of the metric name and extracts the label names and
 values using regex. So, to get `mongoproxy{app="foo"}` we would define metric as `mongoproxy.app.foo` and
-provide a custom metrics definition to extract the `app` and `foo` as label name and value respecively.
+provide a custom metrics definition to extract the `app` and `foo` as label name and value respectively.
 
-Alternatively we could maybe try and use the existing Mongo proxy
+Alternatively we could maybe try and use the existing Envoy Mongo proxy
 [metric labels](https://github.com/envoyproxy/envoy/blob/master/source/common/config/well_known_names.cc).
 
 ## Performance of the WASM filter
@@ -43,8 +43,8 @@ Native Mongoproxy and Envoy with just `tcp_proxy` are pretty much on par. Also
 the dummy WASM filter that just does `get_downstream_data()` doesn't have any
 noticeable overhead. However as soon as we start actually decoding the MongoDb
 protocol does the overhead become noticeable - roughly 28%. Still, in many cases
-this is not a too high price to pay for metrics
+this is not a too high price to pay for metrics.
 
-Note: Mongoproxy v0.5.3 had considerably worse results initially (up to 17
+**Note**: Mongoproxy v0.5.3 had considerably worse results initially (up to 17
 seconds and a lot of variability). This was traced back to using a too small
 buffer for proxying the bytes.
