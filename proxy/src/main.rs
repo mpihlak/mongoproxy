@@ -321,9 +321,9 @@ async fn proxy_bytes(
 ) -> Result<(), io::Error>
 {
     let mut tracker_ok = true;
+    let mut buf = [0; 16384];
 
     loop {
-        let mut buf = [0; 1024];
         let len = read_from.read(&mut buf).await?;
 
         if len > 0 {
