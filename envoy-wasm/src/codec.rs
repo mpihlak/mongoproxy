@@ -1,12 +1,12 @@
 use std::error::Error;
 
-use mongodb::{MsgHeader, MongoMessage};
+use mongo_protocol::{MsgHeader, MongoMessage};
 use tracing::{trace};
 
 
 #[derive(Default)]
 pub struct MongoProtocolDecoder {
-    header:             Option<mongodb::MsgHeader>,
+    header:             Option<mongo_protocol::MsgHeader>,
     want_bytes:         usize,
     message_buf:        Vec<u8>,
     message_buf_pos:    usize,
@@ -17,7 +17,7 @@ impl MongoProtocolDecoder {
     pub fn new() -> MongoProtocolDecoder {
         MongoProtocolDecoder {
             header: None,
-            want_bytes: mongodb::HEADER_LENGTH,
+            want_bytes: mongo_protocol::HEADER_LENGTH,
             message_buf: Vec::new(),
             message_buf_pos: 0,
         }
@@ -25,11 +25,13 @@ impl MongoProtocolDecoder {
 
     // Parse the buffer and return the parsed objects.
     //
-    // parse_buffer expects that it is being fed chunks of the incoming stream. It tries to
-    // assemble MongoDb messages and returns the parsed messages.
+    // decode_messages expects that it is being fed chunks of bytes from the incoming data stream.
+    // Returns a Vec of assembled messages, empty if there's isn't enough data.
+    //
+    // It maintains an internal buffer and does not expect to see the same bytes twice.
     //
     // Since MongoDb may send multiple messages in one go, we need to try and consume all the
-    // messages from the parser buffer. Otherwise we might leave some unparsed messages in the
+    // messages from the decoder buffer. Otherwise we might leave some unparsed messages in the
     // buffer and mess up the response/request sequence.
     //
     // The first message we always want to see is the MongoDb message header. This header in turn
@@ -37,7 +39,11 @@ impl MongoProtocolDecoder {
     // bytes and parse the message. Once the message is parsed we expect a header again and the
     // process repeats.
     //
-    pub fn parse_buffer(&mut self, buf: &[u8]) -> Result<Vec<(MsgHeader, MongoMessage)>, Box<dyn Error>> {
+    // TODO: There's a lot of unnecessary copying here. We should try and get rid of this.
+    // For instance we could just take ownership of the Vec<u8> that get_<up|down>stream_data 
+    // gives us.
+    //
+    pub fn decode_messages(&mut self, buf: &[u8]) -> Result<Vec<(MsgHeader, MongoMessage)>, Box<dyn Error>> {
         self.message_buf.extend(buf);
 
         let mut result = Vec::new();
@@ -52,10 +58,10 @@ impl MongoProtocolDecoder {
 
             if self.header.is_none() {
                 let hdr = MsgHeader::from_reader(&work_buf[..self.want_bytes])?;
-                assert!(hdr.message_length >= mongodb::HEADER_LENGTH);
+                assert!(hdr.message_length >= mongo_protocol::HEADER_LENGTH);
                 trace!("obtained header: {:?}", hdr);
 
-                self.want_bytes = hdr.message_length - mongodb::HEADER_LENGTH;
+                self.want_bytes = hdr.message_length - mongo_protocol::HEADER_LENGTH;
                 self.header = Some(hdr);
             } else {
                 let hdr = self.header.take().unwrap();
@@ -64,12 +70,12 @@ impl MongoProtocolDecoder {
                     &work_buf[..self.want_bytes],
                     false,
                     false,
-                    (hdr.message_length - mongodb::HEADER_LENGTH) as u64)?;
+                    (hdr.message_length - mongo_protocol::HEADER_LENGTH) as u64)?;
                 trace!("obtained message: {:?}", msg);
                 result.push((hdr, msg));
 
                 // We got the payload, time to ask for a header again
-                self.want_bytes = mongodb::HEADER_LENGTH;
+                self.want_bytes = mongo_protocol::HEADER_LENGTH;
             }
 
             // Advance the message buf to the unprocessed bytes
@@ -91,7 +97,7 @@ mod tests {
 
     use super::*;
     use bson::doc;
-    use mongodb::{MsgOpMsg};
+    use mongo_protocol::{MsgOpMsg};
     use tracing_subscriber::{FmtSubscriber, EnvFilter};
     use std::sync::Once;
 
@@ -109,7 +115,7 @@ mod tests {
 
     fn create_header(request_id: u32, response_to: u32, len: usize) -> MsgHeader {
         MsgHeader {
-            message_length: len + mongodb::HEADER_LENGTH,
+            message_length: len + mongo_protocol::HEADER_LENGTH,
             request_id,
             response_to,
             op_code: 2013,
@@ -136,15 +142,15 @@ mod tests {
         init_tracing();
 
         let hdr = create_header(1234, 5678, 0);
-        let mut buf = [0 as u8; mongodb::HEADER_LENGTH];
+        let mut buf = [0 as u8; mongo_protocol::HEADER_LENGTH];
         hdr.write(&mut buf[..]).unwrap();
 
-        let mut parser = MongoProtocolDecoder::new();
-        let result = parser.parse_buffer(&buf.to_vec()).unwrap();
+        let mut decoder = MongoProtocolDecoder::new();
+        let result = decoder.decode_messages(&buf.to_vec()).unwrap();
 
         assert_eq!(result.len(), 0);
-        assert!(parser.header.is_some());
-        assert_eq!(parser.want_bytes, 0);
+        assert!(decoder.header.is_some());
+        assert_eq!(decoder.want_bytes, 0);
     }
 
     #[test]
@@ -158,8 +164,8 @@ mod tests {
         hdr.write(&mut buf).unwrap();
         buf.extend(msg_buf);
 
-        let mut parser = MongoProtocolDecoder::new();
-        let result = parser.parse_buffer(&buf).unwrap();
+        let mut decoder = MongoProtocolDecoder::new();
+        let result = decoder.decode_messages(&buf).unwrap();
         assert_eq!(result.len(), 1);
 
         match result.iter().next().unwrap() {
@@ -173,15 +179,15 @@ mod tests {
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
         }
 
-        assert!(parser.header.is_none());
-        assert_eq!(parser.want_bytes, mongodb::HEADER_LENGTH);
+        assert!(decoder.header.is_none());
+        assert_eq!(decoder.want_bytes, mongo_protocol::HEADER_LENGTH);
     }
 
     #[test]
     fn test_parse_partial_msg_sequence() {
         init_tracing();
 
-        let mut parser = MongoProtocolDecoder::new();
+        let mut decoder = MongoProtocolDecoder::new();
         let mut buf = Vec::new();
 
         let first_msg_buf = create_message("insert", "foo");
@@ -190,9 +196,9 @@ mod tests {
         // Write the header of the first message and try parse. This must parse
         // the header but return nothing because it doesn't have a message body yet.
         hdr.write(&mut buf).unwrap();
-        let result = parser.parse_buffer(&buf).unwrap();
+        let result = decoder.decode_messages(&buf).unwrap();
         if result.len() == 0 {
-            let hdr = parser.header.as_ref().unwrap();
+            let hdr = decoder.header.as_ref().unwrap();
             assert_eq!(hdr.request_id, 1234);
             assert_eq!(hdr.response_to, 5678);
         } else {
@@ -203,16 +209,16 @@ mod tests {
         buf = first_msg_buf.to_vec();
 
         // And construct and write the header of the second message. NB! We don't write
-        // the second message body just yet, because we want to verify that the parser
+        // the second message body just yet, because we want to verify that the decoder
         // doesn't get confused.
 
         let second_msg_buf = create_message("delete", "bar");
         let hdr = create_header(5678, 1234, second_msg_buf.len());
         hdr.write(&mut buf).unwrap();
 
-        // Now the parser must return the parsed first message. It also should have
+        // Now the decoder must return the parsed first message. It also should have
         // started to parse the bytes for the header of the second message.
-        match parser.parse_buffer(&buf).unwrap().iter().next().unwrap() {
+        match decoder.decode_messages(&buf).unwrap().iter().next().unwrap() {
             (_, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(m.documents[0].get_str("op").unwrap(), "insert");
@@ -223,10 +229,10 @@ mod tests {
 
         // Now, the next call with empty buffer must parse the second message header
         // but not return the message itself.
-        match parser.parse_buffer(&[]).unwrap().is_empty() {
+        match decoder.decode_messages(&[]).unwrap().is_empty() {
             true => {
-                assert!(parser.header.is_some());
-                let hdr = parser.header.as_ref().unwrap();
+                assert!(decoder.header.is_some());
+                let hdr = decoder.header.as_ref().unwrap();
                 assert_eq!(hdr.request_id, 5678);
                 assert_eq!(hdr.response_to, 1234);
             }
@@ -236,7 +242,7 @@ mod tests {
         // Finally write the seconds message body and expect to parse the full message.
         // Also check that the header matches the second message.
         buf = second_msg_buf.to_vec();
-        match parser.parse_buffer(&buf).unwrap().iter().next().unwrap() {
+        match decoder.decode_messages(&buf).unwrap().iter().next().unwrap() {
             (h, MongoMessage::Msg(m)) => {
                 assert_eq!(m.documents.len(), 1);
                 assert_eq!(h.request_id, 5678);
@@ -247,15 +253,15 @@ mod tests {
             other => panic!("Instead of MsgOpMsg, got this: {:?}", other),
         }
 
-        assert!(parser.header.is_none());
-        assert_eq!(parser.want_bytes, mongodb::HEADER_LENGTH);
+        assert!(decoder.header.is_none());
+        assert_eq!(decoder.want_bytes, mongo_protocol::HEADER_LENGTH);
     }
 
     #[test]
     fn test_parse_complete_msg_sequence() {
         init_tracing();
 
-        let mut parser = MongoProtocolDecoder::new();
+        let mut decoder = MongoProtocolDecoder::new();
         let mut buf = Vec::new();
 
         // Write the first message
@@ -271,7 +277,7 @@ mod tests {
         buf.extend(&msg_buf);
 
         // Parse and validate the messages
-        let result = parser.parse_buffer(&buf).unwrap();
+        let result = decoder.decode_messages(&buf).unwrap();
         assert_eq!(result.len(), 2);
 
         let mut it = result.iter();

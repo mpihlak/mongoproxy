@@ -16,7 +16,7 @@ services:
       - "27111:27111"
     volumes:
       - ${PWD}/envoy.yaml:/etc/envoy.yaml
-      - ${PWD}/target/wasm32-unknown-unknown/debug/envoy_wasm.wasm:/usr/local/lib/mongoproxy.wasm
+      - ${PWD}/../target/wasm32-unknown-unknown/debug/envoy_wasm.wasm:/usr/local/lib/mongoproxy.wasm
   mongodb:
     container_name: mongo
     image: mongo
