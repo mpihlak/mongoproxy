@@ -1,22 +1,12 @@
 FROM rust:1.47.0-buster as builder
 
-WORKDIR /build
-RUN USER=root cargo new --bin mongoproxy
-
 WORKDIR /build/mongoproxy
 
 COPY Cargo.* ./
-RUN cargo build --release
+COPY proxy/ ./proxy
+COPY mongo-protocol/ ./mongo-protocol
 
-# Clean up dummy project remains
-RUN rm src/*.rs
-RUN rm target/*/deps/mongoproxy*
-RUN rm target/*/mongoproxy
-
-# Now, build and test mongoproxy
-COPY src/ ./src/
 RUN cargo build --release
-RUN cargo test --release
 
 FROM debian:buster-slim
 
