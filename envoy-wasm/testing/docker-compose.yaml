@@ -16,7 +16,17 @@ services:
       - "27111:27111"
     volumes:
       - ${PWD}/envoy.yaml:/etc/envoy.yaml
-      - ${PWD}/../target/wasm32-unknown-unknown/debug/envoy_wasm.wasm:/usr/local/lib/mongoproxy.wasm
+      - ${PWD}/../target/wasm32-unknown-unknown/release/envoy_wasm.wasm:/usr/local/lib/mongoproxy.wasm
+  mongoproxy:
+    container_name: mongoproxy
+    image: mpihlak/mongoproxy:v0.5.3
+    environment:
+      - RUST_BACKTRACE=1
+      - RUST_LOG=info
+    command: ./mongoproxy --proxy 27112:mongodb:27017
+    ports:
+      - "9898:9898"
+      - "27112:27112"
   mongodb:
     container_name: mongo
     image: mongo
