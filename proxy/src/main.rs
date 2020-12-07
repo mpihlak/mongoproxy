@@ -323,7 +323,7 @@ async fn proxy_bytes(
     let mut tracker_ok = true;
 
     loop {
-        let mut buf = bytes::BytesMut::with_capacity(131072);
+        let mut buf = bytes::BytesMut::with_capacity(16384);
         let len = read_from.read_buf(&mut buf).await?;
 
         if len > 0 {
