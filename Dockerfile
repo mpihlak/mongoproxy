@@ -7,6 +7,7 @@ COPY proxy/ ./proxy
 COPY mongo-protocol/ ./mongo-protocol
 
 RUN cargo build --release
+RUN cargo test --release
 
 FROM debian:buster-slim
 
