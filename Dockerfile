@@ -20,3 +20,5 @@ USER mongoproxy
 WORKDIR /mongoproxy
 COPY --from=builder /build/mongoproxy/target/release/mongoproxy ./
 COPY iptables-init.sh .
+
+ENV MALLOC_ARENA_MAX 2
