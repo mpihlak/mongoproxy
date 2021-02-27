@@ -156,6 +156,8 @@ impl MongoMessage {
     }
 
     // Extract a message or return an error
+    //
+    // Note that this assumes that it is safe to read everything from the reader.
     #[maybe_async::maybe_async]
     pub async fn extract_message(
         op: u32,
@@ -697,6 +699,7 @@ impl MsgOpCompressed {
         let compressor_id = rdr.read_u8().await?;
 
         // Ignore the actual compressed message, we are not going to use it
+        let _len = io::copy(&mut rdr, &mut io::sink()).await?;
 
         Ok(MsgOpCompressed{original_op, uncompressed_size, compressor_id})
     }
