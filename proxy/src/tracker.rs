@@ -326,7 +326,7 @@ impl ClientRequest {
             debug!("Extracted trace header: {:?}", parent);
             let span = tracer
                 .span_builder(op)
-                .with_parent(parent.clone())
+                .with_parent(parent)
                 .with_kind(SpanKind::Server)
                 .with_attributes(vec![
                     KeyValue::new("db.mongodb.collection", coll.to_owned()),
