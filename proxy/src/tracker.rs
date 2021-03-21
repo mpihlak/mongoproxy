@@ -8,10 +8,10 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn, info_span};
 use prometheus::{CounterVec,HistogramVec,Gauge};
 
-use opentelemetry::api::trace::{Tracer, SpanReference, SpanKind};
-use opentelemetry::api::trace::Span as _Span;
+use opentelemetry::trace::{Tracer, SpanKind, TraceContextExt};
+use opentelemetry::trace::Span as _Span;
 use opentelemetry::sdk::trace::Span;
-use opentelemetry::api::KeyValue;
+use opentelemetry::{KeyValue};
 
 use async_bson::Document;
 
@@ -139,12 +139,12 @@ lazy_static! {
 }
 
 // Since "getMore" doesn't have an attached trace id we need a way to look up the parent trace for
-// them. So we need to keep around the SpanReferences for the initial operation and look them up
+// them. So we need to keep around the trace Contexts for the initial operation and look them up
 // by the server hostport and cursor id.
 //
 // XXX: If the cursor id's are not unique within a MongoDb instance then there's
 // a risk of collision if there are multiple databases on the same server.
-pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), SpanReference>;
+pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), opentelemetry::Context>;
 
 
 // Stripped down version of the client request. We need this mostly for timing
@@ -291,7 +291,7 @@ impl ClientRequest {
                 let trace_mapper = tracker.app.trace_mapper.lock().unwrap();
 
                 // Look up the text representation of the parent span
-                let parent_trace_ref = match trace_mapper.get(&(tracker.server_addr_sa, cursor)) {
+                let parent_span_ctx = match trace_mapper.get(&(tracker.server_addr_sa, cursor)) {
                     Some(parent_trace_id) => parent_trace_id,
                     _ => {
                         debug!("Parent span not found for cursor_id={}", cursor);
@@ -304,10 +304,10 @@ impl ClientRequest {
                 // document of the first "find", so that's where we put add it to the trace_mapper.
 
                 let span = tracer.span_builder(op)
-                    .with_parent(parent_trace_ref.clone())
+                    .with_parent_context(parent_span_ctx.clone())
                     .with_kind(SpanKind::Server)
                     .start(tracer);
-                debug!("Started getMore span: {:?}", span.span_reference());
+                debug!("Started getMore span: {:?}", span.span_context());
 
                 return Some((cursor, span));
             }
@@ -326,7 +326,7 @@ impl ClientRequest {
             debug!("Extracted trace header: {:?}", parent);
             let span = tracer
                 .span_builder(op)
-                .with_parent(parent)
+                .with_parent_context(parent)
                 .with_kind(SpanKind::Server)
                 .with_attributes(vec![
                     KeyValue::new("db.mongodb.collection", coll.to_owned()),
@@ -337,7 +337,7 @@ impl ClientRequest {
                     KeyValue::new("db.client.app", tracker.client_application.clone()),
                 ])
                 .start(tracer);
-            debug!("Started initial span: {:?}", span.span_reference());
+            debug!("Started initial span: {:?}", span.span_context());
 
             // Tag the span with all the documents in the message. This will give
             // us the query payload, delete query, etc.
@@ -629,25 +629,34 @@ impl MongoStatsTracker{
                     }
                 } else if client_request.op == "find" || client_request.op == "aggregate" {
                     // This is a response to the first call of a cursor operation. If it was traced
-                    // we take the requests span span id and associate it with cursor id so that
+                    // we take the requests' span context and associate it with cursor id so that
                     // subsequent getMore operations can follow spans from it.
                     //
-                    // Note that we will let the actual parent span to go out of scope after
-                    // observing it so that the span gets reported promptly. Thus we don't
-                    // store the actual span in the hashmap, but just it's trace_id.
+                    // Note that we will let the initial span to go out of scope after observing it
+                    // so that the span gets reported promptly. The subsequent getMore operations
+                    // will each be reported in their own span that is the child of the initial
+                    // "find" operation.
                     //
                     // Note: For a find() operation without limit, MongoDb will not immediately
                     // close the cursor even if the find immediately returns all the documents.
                     // Instead it expects the app to do a "getMore" and this is when we remove
                     // the entry from the "trace parent" HashMap.
                     //
-                    // XXX: If the application never does a getMore we will be leaking some.
+                    // XXX: Since we're processing requests and responses in different tasks, we
+                    // might have a situation where client "find" is completed, the results are
+                    // not yet processed and we already receive a "getMore". This means that we
+                    // will not be able to properly trace the getMore as we only obtain the
+                    // cursor id after the initial "find" results are in.
+                    //
+                    // XXX: If the application never does a getMore we will be leaking memory.
                     //
                     if let Some(span) = &client_request.span {
                         debug!("Saving parent trace for cursor_id={}", cursor_id);
                         let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
-                        trace_mapper.insert((self.server_addr_sa, cursor_id), span.span_reference());
+                        let cx = opentelemetry::Context::current_with_span(span.clone());
+
+                        trace_mapper.insert((self.server_addr_sa, cursor_id), cx);
                         CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
                     }
                 } else if client_request.op != "getMore" {

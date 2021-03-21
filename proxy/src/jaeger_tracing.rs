@@ -4,11 +4,10 @@ use std::net::{SocketAddr};
 use tracing::{info,debug};
 
 pub use opentelemetry::sdk::trace::Tracer;
-pub use opentelemetry::api::trace::SpanReference;
-use opentelemetry_jaeger::Uninstall;
-use opentelemetry::sdk::propagation::JaegerPropagator;
-use opentelemetry::api::propagation::TextMapPropagator;
-use opentelemetry::api::trace::TraceContextExt;
+pub use opentelemetry::trace::SpanContext;
+
+use opentelemetry::global;
+use opentelemetry_jaeger::{Uninstall, Propagator};
 
 pub const TRACE_ID_PREFIX: &str = "uber-trace-id";
 
@@ -25,12 +24,15 @@ pub fn init_tracer(
     info!("Initializing tracer with service name {}, agent address: {}",
         service_name, jaeger_addr);
 
+    global::set_text_map_propagator(Propagator::new());
+
     let (tracer, uninstall) = opentelemetry_jaeger::new_pipeline()
         .from_env()
         .with_agent_endpoint(jaeger_addr)
         .with_service_name(service_name)
         .install()
         .unwrap();
+
     debug!("Initialized tracer: {:?} provider={:?}", tracer, tracer.provider());
 
     (Some(tracer), Some(uninstall))
@@ -40,7 +42,7 @@ pub fn init_tracer(
 //
 // This only returns Some if the span is sampled. Otherwise we just ignore it as not to generate
 // useless orphaned spans.
-pub fn extract_from_text(span_text: &str) -> Option<SpanReference>
+pub fn extract_from_text(span_text: &str) -> Option<opentelemetry::Context>
 {
     // For now expect that the trace is something like "uber-trace-id:1232132132:323232:1"
     // No spaces, quotation marks or other funny stuff.
@@ -58,15 +60,9 @@ pub fn extract_from_text(span_text: &str) -> Option<SpanReference>
         trace_data.to_string()
     );
 
-    let span_cx = JaegerPropagator::new().extract(&text_map);
-    if let Some(span_ref) = span_cx.remote_span_reference() {
-        if !span_ref.is_sampled() {
-            debug!("Trace not sampled, ignoring");
-            None
-        } else {
-            Some(span_ref.clone())
-        }
-    } else {
-        None
-    }
+    let parent_ctx = global::get_text_map_propagator(|propagator| {
+        propagator.extract(&text_map)
+    });
+
+    Some(parent_ctx)
 }
