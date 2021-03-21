@@ -272,13 +272,12 @@ impl MsgOpMsg {
     // Construct a new OP_MSG message from a reader. This requires the length of the whole
     // message to be passed in to simplify handling of the optional checksum.
     #[maybe_async::maybe_async]
-    pub async fn from_reader<T>(
+    pub async fn from_reader<T: DocumentReader>(
         rdr: &mut T,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
         message_length: u64,
     ) -> Result<Self>
-        where T: DocumentReader
     {
         let flag_bits = rdr.read_u32_le().await?;
         debug!("flag_bits={:04x}", flag_bits);
@@ -292,6 +291,7 @@ impl MsgOpMsg {
         #[cfg(not(feature="is_sync"))]
         let msg = {
             let mut rdr = rdr.take(body_length);
+
             MsgOpMsg::read_body(&mut rdr, flag_bits, log_mongo_messages, collect_tracing_data).await?
         };
         #[cfg(feature="is_sync")]
@@ -310,7 +310,11 @@ impl MsgOpMsg {
     }
 
     // Read the body of the message, processing all the sections but leaving the checksum
-    // for the caller.
+    //
+    // Because the sections are stored back to back the only way to identify that we've read them
+    // all is to actually go and try read them all. However since there can also be a checksum, we
+    // need to avoid reading into that. Thus we rely on the in `rdr` to be limited to only take the
+    // section bytes and exclude the checksum bytes.
     //
     // For a detailed description of OP_MSG messages, see:
     // https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#id1
@@ -320,16 +324,16 @@ impl MsgOpMsg {
     // this but I just haven't found it.
     //
     #[maybe_async::maybe_async]
-    async fn read_body<T>(
-        mut rdr: &mut T,
+    async fn read_body(
+        mut rdr: impl DocumentReader,
         flag_bits: u32,
         log_mongo_messages: bool,
         collect_tracing_data: bool,
     ) -> Result<Self>
-        where T: DocumentReader
     {
         let mut documents = Vec::new();
         let mut section_bytes = Vec::new();
+        let mut rdr = &mut rdr;
 
         loop {
             let kind = match rdr.read_u8().await {
@@ -372,9 +376,9 @@ impl MsgOpMsg {
                 // Consume all the documents in the section, but no more.
                 #[cfg(not(feature="is_sync"))]
                 {
-                    let mut rdr = &mut rdr.take(section_size as u64);
+                    let mut section_rdr = rdr.take(section_size as u64);
                     while MsgOpMsg::process_section_document(
-                        &mut rdr,
+                        &mut section_rdr,
                         log_mongo_messages,
                         collect_tracing_data,
                         &mut documents,
