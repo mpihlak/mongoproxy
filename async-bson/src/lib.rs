@@ -50,7 +50,7 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(not(feature="is_sync"))]
 use {
-    tokio::io::{AsyncRead, AsyncReadExt, AsyncBufReadExt},
+    tokio::io::{AsyncReadExt, AsyncBufReadExt},
     std::future::Future,
     std::pin::Pin,
 };
@@ -66,7 +66,7 @@ type ParserResult<'a> = Result<()>;
 fn pin_maybe<T>(v: T) -> T { v }
 
 #[cfg(not(feature="is_sync"))]
-pub trait DocumentReader: AsyncRead+AsyncReadExt+AsyncBufReadExt+Unpin+Send {}
+pub trait DocumentReader: AsyncReadExt+AsyncBufReadExt+Unpin+Send {}
 #[cfg(not(feature="is_sync"))]
 impl <T>DocumentReader for T where T: AsyncReadExt+AsyncBufReadExt+Unpin+Send {}
 
