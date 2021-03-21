@@ -4,10 +4,12 @@ use std::net::{SocketAddr,ToSocketAddrs};
 use std::io;
 use std::str;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt, stream_reader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener,TcpStream};
 use tokio::net::tcp::{OwnedReadHalf,OwnedWriteHalf};
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::io::StreamReader;
 
 use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
@@ -165,7 +167,7 @@ async fn run_accept_loop(local_addr: String, remote_addr: String, app: AppConfig
         info!("Proxying {} -> {}", local_addr, remote_addr);
     }
 
-    let mut listener = TcpListener::bind(&local_addr).await.unwrap();
+    let listener = TcpListener::bind(&local_addr).await.unwrap();
 
     loop {
         match listener.accept().await {
@@ -316,8 +318,8 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
 async fn proxy_bytes(
     read_from: &mut OwnedReadHalf,
     write_to: &mut OwnedWriteHalf,
-    mut tracker_channel: mpsc::Sender<BufBytes>,
-    mut notify_channel: mpsc::Sender<BufBytes>,
+    tracker_channel: mpsc::Sender<BufBytes>,
+    notify_channel: mpsc::Sender<BufBytes>,
 ) -> Result<(), io::Error>
 {
     let mut tracker_ok = true;
@@ -357,9 +359,11 @@ async fn track_messages<F>(
 ) -> Result<(), io::Error>
     where F: FnMut(MsgHeader, MongoMessage)
 {
-    let mut s = stream_reader(rx);
+    let stream = ReceiverStream::new(rx);
+    let mut sr = StreamReader::new(stream);
+
     loop {
-        match MongoMessage::from_reader(&mut s, log_mongo_messages, collect_tracing_data).await {
+        match MongoMessage::from_reader(&mut sr, log_mongo_messages, collect_tracing_data).await {
             Ok((hdr, msg)) => {
                 tracker_fn(hdr, msg);
             },
