@@ -3,6 +3,7 @@
 members = [
     "proxy",
     "mongo-protocol",
+    "async-bson",
 ]
 
 # WASM library depends on sync version of async-bson and mongo-protocol. This
