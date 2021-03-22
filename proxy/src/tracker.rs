@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn, info_span};
 use prometheus::{CounterVec,HistogramVec,Gauge};
 
-use opentelemetry::trace::{Tracer, SpanContext, SpanKind};
+use opentelemetry::trace::{Tracer, SpanKind, TraceContextExt};
 use opentelemetry::trace::Span as _Span;
 use opentelemetry::sdk::trace::Span;
 use opentelemetry::{KeyValue};
@@ -144,7 +144,7 @@ lazy_static! {
 //
 // XXX: If the cursor id's are not unique within a MongoDb instance then there's
 // a risk of collision if there are multiple databases on the same server.
-pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), SpanContext>;
+pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), opentelemetry::Context>;
 
 
 // Stripped down version of the client request. We need this mostly for timing
@@ -304,8 +304,7 @@ impl ClientRequest {
                 // document of the first "find", so that's where we put add it to the trace_mapper.
 
                 let span = tracer.span_builder(op)
-                    .with_trace_id(parent_span_ctx.trace_id())
-                    .with_span_id(parent_span_ctx.span_id())
+                    .with_parent_context(parent_span_ctx.clone())
                     .with_kind(SpanKind::Server)
                     .start(tracer);
                 debug!("Started getMore span: {:?}", span.span_context());
@@ -655,7 +654,9 @@ impl MongoStatsTracker{
                         debug!("Saving parent trace for cursor_id={}", cursor_id);
                         let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
-                        trace_mapper.insert((self.server_addr_sa, cursor_id), span.span_context().clone());
+                        let cx = opentelemetry::Context::current_with_span(span.clone());
+
+                        trace_mapper.insert((self.server_addr_sa, cursor_id), cx);
                         CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
                     }
                 } else if client_request.op != "getMore" {
