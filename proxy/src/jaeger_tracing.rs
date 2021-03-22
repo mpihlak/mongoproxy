@@ -5,8 +5,8 @@ use tracing::{info,debug};
 
 pub use opentelemetry::sdk::trace::Tracer;
 pub use opentelemetry::trace::SpanContext;
+
 use opentelemetry::global;
-use opentelemetry::trace::TraceContextExt;
 use opentelemetry_jaeger::{Uninstall, Propagator};
 
 pub const TRACE_ID_PREFIX: &str = "uber-trace-id";
@@ -64,14 +64,5 @@ pub fn extract_from_text(span_text: &str) -> Option<opentelemetry::Context>
         propagator.extract(&text_map)
     });
 
-    if let Some(remote_ctx) = parent_ctx.remote_span_context() {
-        if remote_ctx.is_sampled() {
-            Some(parent_ctx.clone())
-        } else {
-            debug!("Trace not sampled, ignoring");
-            None
-        }
-    } else {
-        None
-    }
+    Some(parent_ctx)
 }

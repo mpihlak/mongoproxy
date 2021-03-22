@@ -90,5 +90,5 @@ if __name__ == "__main__":
                 { "$sort": { "total": -1 } } ]):
                 pass
 
-    time.sleep(2)
+    time.sleep(5)
     tracer.close()
