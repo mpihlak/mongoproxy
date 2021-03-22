@@ -42,7 +42,7 @@ pub fn init_tracer(
 //
 // This only returns Some if the span is sampled. Otherwise we just ignore it as not to generate
 // useless orphaned spans.
-pub fn extract_from_text(span_text: &str) -> Option<SpanContext>
+pub fn extract_from_text(span_text: &str) -> Option<opentelemetry::Context>
 {
     // For now expect that the trace is something like "uber-trace-id:1232132132:323232:1"
     // No spaces, quotation marks or other funny stuff.
@@ -66,7 +66,7 @@ pub fn extract_from_text(span_text: &str) -> Option<SpanContext>
 
     if let Some(remote_ctx) = parent_ctx.remote_span_context() {
         if remote_ctx.is_sampled() {
-            Some(remote_ctx.clone())
+            Some(parent_ctx.clone())
         } else {
             debug!("Trace not sampled, ignoring");
             None
