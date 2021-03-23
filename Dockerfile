@@ -1,10 +1,11 @@
-FROM rust:1.47.0-buster as builder
+FROM rust:1.50-buster as builder
 
 WORKDIR /build/mongoproxy
 
 COPY Cargo.* ./
 COPY proxy/ ./proxy
 COPY mongo-protocol/ ./mongo-protocol
+COPY async-bson/ ./async-bson
 
 RUN cargo build --release
 RUN cargo test --release
