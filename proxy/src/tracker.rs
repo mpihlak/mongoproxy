@@ -587,7 +587,10 @@ impl MongoStatsTracker{
                 n_docs_changed = n_docs_returned;
             } else if client_request.op == "update" {
                 // Update uses n_modified to indicate number of docs changed
-                n_docs_changed = Some(section.get_i32("n_modified").unwrap_or(0));
+                // n_upserted for number of new documents inserted
+                let n_modified = section.get_i32("n_modified").unwrap_or(0);
+                let n_upserted = section.get_i32("n_upserted").unwrap_or(0);
+                n_docs_changed = Some(n_modified + n_upserted);
             } else if section.contains_key("n") {
                 // Lump the rest of the update operations together
                 n_docs_changed = Some(section.get_i32("n").unwrap_or(0));
