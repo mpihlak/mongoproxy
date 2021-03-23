@@ -170,45 +170,49 @@ impl ClientRequest {
 
         match msg {
             MongoMessage::Msg(m) => {
-                // Go and loop through all the documents in the msg and see if we
-                // find an operation that we know. There might be multiple documents
-                // in the message but we assume that only one of them contains an actual op.
+                // First determine the op, db and collection name used for metrics and tracing.
+                // Usually these should be in the "Type 0" document (which of there MUST be only
+                // one). However we don't have that information here and must go through all of
+                // them and make a prioritized guess.
                 //
-                // Note: In most cases we want to look at "Type 0" payloads here, except sometimes
-                // mongo puts $comment fields into "Type 1" payloads and then we'd miss out on
-                // tracing.
+                let mut collection_op = None;
+                let mut other_op = None;
                 for s in m.documents.iter() {
-                    if op.is_empty() {
-                        if let Some(opname) = s.get_str("op") {
-                            op = opname.to_owned();
-                            if MONGODB_COLLECTION_OPS.contains(opname) {
-                                // Some operations have the collection as the value of "op"
-                                if let Some(collection) = s.get_str("op_value") {
-                                    coll = collection.to_owned();
-                                }
-                            } else {
-                                // While others have an explicit "collection" field
-                                if let Some(collection) = s.get_str("collection") {
-                                    coll = collection.to_owned();
-                                }
+                    let opname = s.get_str("op").unwrap_or("");
 
-                                if !OTHER_MONGODB_OPS.contains(opname) {
-                                    // Track all unrecognized ops that we explicitly don't ignore
-                                    warn!("unsupported op: {}", opname);
-                                    UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&opname]).inc();
-                                }
-                            }
+                    if MONGODB_COLLECTION_OPS.contains(opname) {
+                        collection_op = Some(opname);
+                        coll = s.get_str("op_value").unwrap_or("").to_owned();
+                    } else {
+                        if !OTHER_MONGODB_OPS.contains(opname) {
+                            // Track all unrecognized ops that we explicitly don't ignore
+                            warn!("unsupported op: {}", opname);
+                            UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&opname]).inc();
                         }
 
-                        if let Some(have_db) = s.get_str("db") {
-                            db = have_db.to_string();
-                        }
+                        other_op = Some(opname);
+                        coll = s.get_str("collection").unwrap_or("").to_owned();
                     }
 
+                    if let Some(have_db) = s.get_str("db") {
+                        db = have_db.to_string();
+                    }
+                }
+
+                op = if let Some(opname) = collection_op {
+                    opname.to_owned()
+                } else {
+                    other_op.unwrap_or("").to_owned()
+                };
+
+                // Once we have the opname, collection and db, see if we can create a tracing span
+                // out of one of the documents.
+                for s in m.documents.iter() {
                     if let Some((ok_cursor_id, ok_span)) = ClientRequest::maybe_create_span(
                             &tracker, &m, &db, &coll, &op, s) {
                         cursor_id = ok_cursor_id;
                         span = Some(ok_span);
+                        break;
                     }
                 }
             },
