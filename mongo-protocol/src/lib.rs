@@ -44,6 +44,7 @@ lazy_static! {
             .match_array_len("/cursor/firstBatch", "docs_returned")
             .match_array_len("/cursor/nextBatch", "docs_returned")
             .match_exact("/n", "n")
+            .match_array_len("/upserted", "n_upserted")
             // findAndModify returns number of collection in lastErrorObject/n
             .match_exact("/lastErrorObject/n", "n")
             .match_exact("/nModified", "n_modified");
