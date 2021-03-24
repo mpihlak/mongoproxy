@@ -1,0 +1,5 @@
+requests
+pymongo
+jaeger_client
+opentracing
+prometheus-client

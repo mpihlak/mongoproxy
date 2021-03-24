@@ -1,0 +1,36 @@
+version: "3"
+services:
+  mongoproxy:
+    container_name: mongoproxy-i9n-test
+    image: mongoproxy
+    environment:
+      - RUST_BACKTRACE=1
+      - RUST_LOG=debug
+    command: ./mongoproxy --proxy 27111:mongodb-i9n-test:27017 --enable-jaeger --jaeger-addr jaeger-i9n-test:6831 --log-mongo-messages
+    ports:
+      - "9898:9898"
+      - "27111:27111"
+  mongodb:
+    container_name: mongodb-i9n-test
+    image: mongo
+    logging:
+      driver: none
+    ports:
+      - "27017:27017"
+  prometheus:
+    container_name: prometheus-i9n-test
+    image: prom/prometheus
+    logging:
+      driver: none
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  jaeger:
+    container_name: jaeger-i9n-test
+    image: jaegertracing/all-in-one:1.8
+    logging:
+      driver: none
+    ports:
+      - "6831:6831/udp"
+      - "16686:16686"

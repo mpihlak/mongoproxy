@@ -1,0 +1,8 @@
+global:
+  scrape_interval:     5s
+
+scrape_configs:
+  - job_name: 'mongoproxy'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['mongoproxy-i9n-test:9898']
