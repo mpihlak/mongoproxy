@@ -8,3 +8,7 @@ TODO.txt
 docker-build.sh
 .DS_Store
 .vscode/*
+*.log
+*.pyc
+*/__pycache__/*
+x

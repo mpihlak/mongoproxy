@@ -1,6 +1,7 @@
 target/**
-envoy-wasm/target/**
+*/target/**
 testing/**
 tmp/**
 .git/**
 .vscode/**
+*.log
