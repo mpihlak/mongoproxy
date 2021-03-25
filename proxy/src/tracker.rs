@@ -177,12 +177,15 @@ impl ClientRequest {
                 //
                 let mut collection_op = None;
                 let mut other_op = None;
+                let mut coll_name_from_op = None;
+                let mut coll_name_from_param = None;
+
                 for s in m.documents.iter() {
                     let opname = s.get_str("op").unwrap_or("");
 
                     if MONGODB_COLLECTION_OPS.contains(opname) {
                         collection_op = Some(opname);
-                        coll = s.get_str("op_value").unwrap_or("").to_owned();
+                        coll_name_from_op = Some(s.get_str("op_value").unwrap_or(""));
                     } else {
                         if !OTHER_MONGODB_OPS.contains(opname) {
                             // Track all unrecognized ops that we explicitly don't ignore
@@ -191,7 +194,7 @@ impl ClientRequest {
                         }
 
                         other_op = Some(opname);
-                        coll = s.get_str("collection").unwrap_or("").to_owned();
+                        coll_name_from_param = Some(s.get_str("collection").unwrap_or(""));
                     }
 
                     if let Some(have_db) = s.get_str("db") {
@@ -203,6 +206,12 @@ impl ClientRequest {
                     opname.to_owned()
                 } else {
                     other_op.unwrap_or("").to_owned()
+                };
+
+                coll = if let Some(coll_name) = coll_name_from_op {
+                    coll_name.to_owned()
+                } else {
+                    coll_name_from_param.unwrap_or("").to_owned()
                 };
 
                 // Once we have the opname, collection and db, see if we can create a tracing span
@@ -595,6 +604,9 @@ impl MongoStatsTracker{
                 // Lump the rest of the update operations together
                 n_docs_changed = Some(section.get_i32("n").unwrap_or(0));
             }
+
+            debug!("client_request: op={} coll={} n_docs_returned={:?} n_docs_changed={:?}",
+                client_request.op, client_request.coll, n_docs_returned, n_docs_changed);
 
             if let Some(n) = n_docs_returned {
                 if let Some(span) = &mut client_request.span {
