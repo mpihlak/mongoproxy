@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import logging
 import time
 import pymongo
@@ -10,14 +11,16 @@ from opentracing.propagation import Format
 from prometheus_client.parser import text_string_to_metric_families
 
 APPNAME = "mongoproxy-i9n-test"
-JAEGER_COLLECTION_DELAY_SECONDS = 3
-MONGOPROXY_METRICS_URL = "http://localhost:9898/metrics"
 NUM_KITTENS = 110
+JAEGER_COLLECTION_DELAY_SECONDS = 3
+
+MONGODB_URL = os.getenv('MONGODB_URL', f"mongodb://localhost:27111/?appName={APPNAME}")
+METRICS_URL = os.getenv('METRICS_URL', "http://localhost:9898/metrics")
 
 
 def get_metrics_snapshot():
     """Get a snapshot of Prometheus metrics from Mongoproxy. Return a dict of Metric's, keyed by name"""
-    res = requests.get(MONGOPROXY_METRICS_URL)
+    res = requests.get(METRICS_URL)
     metric_families = text_string_to_metric_families(res.text)
     metrics_by_name = dict()
     for m in metric_families:
@@ -99,7 +102,7 @@ def main():
 
     tracer = config.initialize_tracer()
 
-    con = pymongo.MongoClient(f"mongodb://localhost:27111/?appName={APPNAME}")
+    con = pymongo.MongoClient(MONGODB_URL)
     db = con['test']
     kittens = db['kittens']
 
