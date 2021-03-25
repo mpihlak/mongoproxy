@@ -1,5 +1,4 @@
 use std::convert::Infallible;
-use std::sync::{Arc,Mutex};
 use std::net::{SocketAddr,ToSocketAddrs};
 use std::io;
 use std::str;
@@ -29,7 +28,7 @@ use mongoproxy::dstaddr;
 use mongoproxy::appconfig::{AppConfig};
 use mongoproxy::tracker::{MongoStatsTracker};
 
-use mongo_protocol::{MsgHeader, MongoMessage};
+use mongo_protocol::{MongoMessage};
 
 
 type BufBytes = Result<bytes::BytesMut, io::Error>;
@@ -252,19 +251,17 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let log_mongo_messages = app.log_mongo_messages;
     let tracing_enabled = app.tracer.is_some();
 
-    let tracker = Arc::new(Mutex::new(
-            MongoStatsTracker::new(
-                &client_addr,
-                &server_addr.to_string(),
-                server_addr,
-                app)));
-    let client_tracker = tracker.clone();
-    let server_tracker = tracker.clone();
+    let tracker = MongoStatsTracker::new(
+        &client_addr,
+        &server_addr.to_string(),
+        server_addr,
+        app,
+    );
 
     client_stream.set_nodelay(true)?;
     server_stream.set_nodelay(true)?;
 
-    // Start the trackers to parse and track MongoDb messages from the input stream. This works by
+    // Start the tracker to parse and track MongoDb messages from the input stream. This works by
     // having the proxy tasks send a copy of the bytes over a channel and process that channel
     // as a stream of bytes, extracting MongoDb messages and tracking the metrics from there.
 
@@ -275,20 +272,9 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let signal_server = server_tx.clone();
 
     tokio::spawn(async move {
-        track_messages(client_rx, log_mongo_messages, tracing_enabled, move |hdr, msg| {
-            let mut tracker = client_tracker.lock().unwrap();
-            tracker.track_client_request(&hdr, &msg);
-        }).await?;
+        track_messages(client_rx, server_rx, log_mongo_messages, tracing_enabled, tracker).await?;
         Ok::<(), io::Error>(())
     }.instrument(info_span!("client tracker")));
-
-    tokio::spawn(async move {
-        track_messages(server_rx, log_mongo_messages, false, move |hdr, msg| {
-            let mut tracker = server_tracker.lock().unwrap();
-            tracker.track_server_response(hdr, msg);
-        }).await?;
-        Ok::<(), io::Error>(())
-    }.instrument(info_span!("server tracker")));
 
     // Now start proxying bytes between the client and the server.
 
@@ -351,27 +337,42 @@ async fn proxy_bytes(
 
 // Process the mpsc channel as a byte stream, parsing MongoDb messages
 // and sending them off to a tracker.
-async fn track_messages<F>(
-    rx: mpsc::Receiver<BufBytes>,
+async fn track_messages(
+    client_rx: mpsc::Receiver<BufBytes>,
+    server_rx: mpsc::Receiver<BufBytes>,
     log_mongo_messages: bool,
     collect_tracing_data: bool,
-    mut tracker_fn: F
+    mut tracker: MongoStatsTracker,
 ) -> Result<(), io::Error>
-    where F: FnMut(MsgHeader, MongoMessage)
 {
-    let stream = ReceiverStream::new(rx);
-    let mut sr = StreamReader::new(stream);
+    let mut client_stream = StreamReader::new(ReceiverStream::new(client_rx));
+    let mut server_stream = StreamReader::new(ReceiverStream::new(server_rx));
 
     loop {
-        match MongoMessage::from_reader(&mut sr, log_mongo_messages, collect_tracing_data).await {
+        match MongoMessage::from_reader(&mut client_stream, log_mongo_messages, collect_tracing_data).await {
             Ok((hdr, msg)) => {
-                tracker_fn(hdr, msg);
+                tracker.track_client_request(&hdr, &msg);
             },
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                // XXX: might still want to process server response
                 return Ok(());
             },
             Err(e) => {
-                error!("Tracker failed: {}", e);
+                error!("Client stream processing failed: {}", e);
+                return Err(e);
+            }
+        }
+
+        match MongoMessage::from_reader(&mut server_stream, log_mongo_messages, collect_tracing_data).await {
+            Ok((hdr, msg)) => {
+                tracker.track_server_response(hdr, msg);
+            },
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                // XXX: Should check client once more?
+                return Ok(());
+            },
+            Err(e) => {
+                error!("Server stream processing failed: {}", e);
                 return Err(e);
             }
         }
