@@ -5,7 +5,7 @@ services:
     image: mongoproxy
     environment:
       - RUST_BACKTRACE=1
-      - RUST_LOG=debug
+      - RUST_LOG=info
     command: ./mongoproxy --proxy 27111:mongodb-i9n-test:27017 --enable-jaeger --jaeger-addr jaeger-i9n-test:6831 --log-mongo-messages
     ports:
       - "9898:9898"

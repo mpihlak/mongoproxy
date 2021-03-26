@@ -109,7 +109,16 @@ def main():
     # Generate some seed data
     kittens.delete_many({})
     for i in range(NUM_KITTENS):
-        kittens.insert_one({"name": "Purry", "i": i})
+        kittens.insert_one({"name": "Purry", "s": i})
+
+    # XXX: Make this a cmdline option
+    test_big_documents = True
+
+    if test_big_documents:
+        # Insert one that is close to MongoDb limit
+        kittens.insert_one({"name": "Spot", "s": 'Meow'*1024*1023*4})
+    else:
+        kittens.insert_one({"name": "Spot", "s": 'Meow'})
 
     def span_as_text(span):
         """Format the span as "uber-trace-id" text map that Mongoproxy understands"""
@@ -117,7 +126,7 @@ def main():
         tracer.inject(span_context=span, format=Format.TEXT_MAP, carrier=text_map)
         return ''.join(["%s:%s" % (k,v) for k, v in text_map.items()])
 
-    common_labels = {
+    kitten_labels = {
         'app': 'mongoproxy-i9n-test',
         'collection': 'kittens',
         'db': 'test',
@@ -125,23 +134,30 @@ def main():
 
     with tracer.start_span('Trace those cats') as root_span:
 
-        # Simple "find" operation that returns nothing
-        with MetricsDelta('FetchOne', 'mongoproxy_documents_returned_total', '_sum') as md:
+        # Fetch one document 
+        with MetricsDelta('FindOne', 'mongoproxy_documents_returned_total', '_sum') as md:
             with tracer.start_span(md.name, root_span) as span:
-                kittens.find({"name": "Spotty"}).comment(span_as_text(span))
-            md.assert_metric_value({'op': 'find', **common_labels}, 0)
+                for c in kittens.find({"name": "Spot"}).comment(span_as_text(span)):
+                    pass
+            md.assert_metric_value({'op': 'find', **kitten_labels}, 1)
+
+        # Simple "find" operation that returns nothing
+        with MetricsDelta('FindNone', 'mongoproxy_documents_returned_total', '_sum') as md:
+            with tracer.start_span(md.name, root_span) as span:
+                for c in kittens.find({"name": "Spotty"}).comment(span_as_text(span)):
+                    pass
+            md.assert_metric_value({'op': 'find', **kitten_labels}, 0)
 
         # "find" with a following "getMore"
-        with MetricsDelta('FetchAll', 'mongoproxy_documents_returned_total', '_sum') as md:
+        with MetricsDelta('FindAndGetMore', 'mongoproxy_documents_returned_total', '_sum') as md:
             with tracer.start_span(md.name, root_span) as span:
                 count = 0
                 for c in kittens.find({"name": "Purry"}).limit(1000).comment(span_as_text(span)):
                     count += 1
-                print(f"Found {count} kittens.")
 
             # expect to have a single 101 row find followed by a getMore for the remainder
-            md.assert_metric_value({'op': 'find', **common_labels}, 101)
-            md.assert_metric_value({'op': 'getMore', **common_labels}, NUM_KITTENS - 101)
+            md.assert_metric_value({'op': 'find', **kitten_labels}, 101)
+            md.assert_metric_value({'op': 'getMore', **kitten_labels}, NUM_KITTENS - 101)
 
         # Update one document
         with MetricsDelta('UpdateOne', 'mongoproxy_documents_changed_total', '_sum') as md:
@@ -150,13 +166,13 @@ def main():
                     {"name": "Purry", "$comment": span_as_text(span) },
                     {"$set": { "name": "Furry" }}
                 )
-            md.assert_metric_value({'op': 'update', **common_labels}, 1)
+            md.assert_metric_value({'op': 'update', **kitten_labels}, 1)
 
         # Delete one document
         with MetricsDelta('DeleteOne', 'mongoproxy_documents_changed_total', '_sum') as md:
             with tracer.start_span(md.name, root_span) as span:
                 kittens.delete_one({"name": "Furry", "$comment": span_as_text(span) })
-            md.assert_metric_value({'op': 'delete', **common_labels}, 1)
+            md.assert_metric_value({'op': 'delete', **kitten_labels}, 1)
 
     tracer.close()
     # TODO: Validate the Jaeger traces, once uploaded to collector
