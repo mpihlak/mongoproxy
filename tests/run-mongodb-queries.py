@@ -137,8 +137,6 @@ def main():
                 count = 0
                 for c in kittens.find({"name": "Purry"}).limit(1000).comment(span_as_text(span)):
                     count += 1
-                    # XXX: Sleep some to increase the chances of find() to be processed before getMore()
-                    time.sleep(0.01)
                 print(f"Found {count} kittens.")
 
             # expect to have a single 101 row find followed by a getMore for the remainder
