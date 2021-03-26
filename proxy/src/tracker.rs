@@ -177,6 +177,7 @@ impl ClientRequest {
                 //
                 let mut collection_op = None;
                 let mut other_op = None;
+                let mut unknown_op = None;
                 let mut coll_name_from_op = None;
                 let mut coll_name_from_param = None;
 
@@ -186,15 +187,11 @@ impl ClientRequest {
                     if MONGODB_COLLECTION_OPS.contains(opname) {
                         collection_op = Some(opname);
                         coll_name_from_op = Some(s.get_str("op_value").unwrap_or(""));
-                    } else {
-                        if !OTHER_MONGODB_OPS.contains(opname) {
-                            // Track all unrecognized ops that we explicitly don't ignore
-                            warn!("unsupported op: {}", opname);
-                            UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&opname]).inc();
-                        }
-
+                    } if OTHER_MONGODB_OPS.contains(opname) {
                         other_op = Some(opname);
                         coll_name_from_param = Some(s.get_str("collection").unwrap_or(""));
+                    } else {
+                        unknown_op = Some(opname);
                     }
 
                     if let Some(have_db) = s.get_str("db") {
@@ -205,7 +202,14 @@ impl ClientRequest {
                 op = if let Some(opname) = collection_op {
                     opname.to_owned()
                 } else {
-                    other_op.unwrap_or("").to_owned()
+                    if let Some(opname) = other_op {
+                        opname.to_owned()
+                    } else {
+                        let opname = unknown_op.unwrap_or("<no-op>");
+                        warn!("unsupported op: {}", opname);
+                        UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&opname]).inc();
+                        opname.to_owned()
+                    }
                 };
 
                 coll = if let Some(coll_name) = coll_name_from_op {
