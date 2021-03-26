@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::StreamReader;
 
-use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
+use prometheus::{Counter,CounterVec,HistogramVec,Encoder,TextEncoder};
 use clap::{Arg, App, crate_version};
 use tracing::{info, warn, error, debug, info_span, Instrument, Level};
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
@@ -36,6 +36,16 @@ type BufBytes = Result<bytes::BytesMut, io::Error>;
 const JAEGER_ADDR: &str = "127.0.0.1:6831";
 const ADMIN_PORT: &str = "9898";
 const SERVICE_NAME: &str = "mongoproxy";
+
+// Max number of bytes to read from the network
+const READ_BUFFER_SIZE: usize = 16384;
+
+// The largest message we can expect from MongoDb (oversize to be safe)
+const MAX_MONGO_MESSAGE_SIZE: usize = 64*1024*1024;
+
+// Max number of events the client and server message channels can take.
+// We ought to be able to buffer the maximum MongoDb message there.
+const MAX_CHANNEL_EVENTS: usize = MAX_MONGO_MESSAGE_SIZE / READ_BUFFER_SIZE;
 
 lazy_static! {
     static ref MONGOPROXY_RUNTIME_INFO: CounterVec =
@@ -67,6 +77,11 @@ lazy_static! {
             "mongoproxy_server_connect_time_seconds",
             "Time it takes to look up and connect to a server",
             &["server_addr"]).unwrap();
+
+    static ref TRACKER_CHANNEL_ERRORS_TOTAL: Counter =
+        register_counter!(
+            "mongoproxy_tracker_channel_errors_total",
+            "Total number of errors from sending bytes to tracker channel").unwrap();
 }
 
 #[tokio::main]
@@ -258,8 +273,8 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     // having the proxy tasks send a copy of the bytes over a channel and process that channel
     // as a stream of bytes, extracting MongoDb messages and tracking the metrics from there.
 
-    let (client_tx, client_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
-    let (server_tx, server_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(32);
+    let (client_tx, client_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(MAX_CHANNEL_EVENTS);
+    let (server_tx, server_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(MAX_CHANNEL_EVENTS);
 
     let signal_client = client_tx.clone();
     let signal_server = server_tx.clone();
@@ -311,7 +326,7 @@ async fn proxy_bytes(
     let mut tracker_ok = true;
 
     loop {
-        let mut buf = bytes::BytesMut::with_capacity(16384);
+        let mut buf = bytes::BytesMut::with_capacity(READ_BUFFER_SIZE);
         let len = read_from.read_buf(&mut buf).await?;
 
         if len > 0 {
@@ -320,11 +335,11 @@ async fn proxy_bytes(
             if tracker_ok {
                 if let Err(e) = tracker_channel.try_send(Ok(buf)) {
                     error!("error sending to tracker, stop: {}", e);
+                    TRACKER_CHANNEL_ERRORS_TOTAL.inc();
                     tracker_ok = false;
 
                     // Let the other side know that we're closed.
-                    let notification = io::Error::new(
-                        io::ErrorKind::UnexpectedEof, "notify channel close");
+                    let notification = io::Error::new(io::ErrorKind::UnexpectedEof, "notify channel close");
                     let _ = notify_channel.send(Err(notification)).await;
                 }
             }
