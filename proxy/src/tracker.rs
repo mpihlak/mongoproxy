@@ -661,12 +661,6 @@ impl MongoStatsTracker{
                     // Instead it expects the app to do a "getMore" and this is when we remove
                     // the entry from the "trace parent" HashMap.
                     //
-                    // XXX: Since we're processing requests and responses in different tasks, we
-                    // might have a situation where client "find" is completed, the results are
-                    // not yet processed and we already receive a "getMore". This means that we
-                    // will not be able to properly trace the getMore as we only obtain the
-                    // cursor id after the initial "find" results are in.
-                    //
                     // XXX: If the application never does a getMore we will be leaking memory.
                     //
                     if let Some(span) = &client_request.span {
