@@ -318,7 +318,7 @@ async fn proxy_bytes(
             write_to.write_all(&buf[0..len]).await?;
 
             if tracker_ok {
-                if let Err(e) = tracker_channel.send(Ok(buf)).await {
+                if let Err(e) = tracker_channel.try_send(Ok(buf)) {
                     error!("error sending to tracker, stop: {}", e);
                     tracker_ok = false;
 
