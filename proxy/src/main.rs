@@ -251,13 +251,6 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let log_mongo_messages = app.log_mongo_messages;
     let tracing_enabled = app.tracer.is_some();
 
-    let tracker = MongoStatsTracker::new(
-        &client_addr,
-        &server_addr.to_string(),
-        server_addr,
-        app,
-    );
-
     client_stream.set_nodelay(true)?;
     server_stream.set_nodelay(true)?;
 
@@ -271,10 +264,17 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let signal_client = client_tx.clone();
     let signal_server = server_tx.clone();
 
+    let tracker = MongoStatsTracker::new(
+        &client_addr,
+        &server_addr.to_string(),
+        server_addr,
+        app,
+    );
+
     tokio::spawn(async move {
-        track_messages(client_rx, server_rx, log_mongo_messages, tracing_enabled, tracker).await?;
+        track_mongo_messages(client_rx, server_rx, log_mongo_messages, tracing_enabled, tracker).await?;
         Ok::<(), io::Error>(())
-    }.instrument(info_span!("client tracker")));
+    }.instrument(info_span!("mongo tracker")));
 
     // Now start proxying bytes between the client and the server.
 
@@ -337,7 +337,13 @@ async fn proxy_bytes(
 
 // Process the mpsc channel as a byte stream, parsing MongoDb messages
 // and sending them off to a tracker.
-async fn track_messages(
+//
+// XXX: We assume here that client always speaks first, followed by a response from the server,
+// then the client goes again and then the server, and so on. This makes it easy to reason about
+// things, and responses are never processes before the request. However this is prone to break
+// when Mongo changes the protocol.
+//
+async fn track_mongo_messages(
     client_rx: mpsc::Receiver<BufBytes>,
     server_rx: mpsc::Receiver<BufBytes>,
     log_mongo_messages: bool,
@@ -350,27 +356,17 @@ async fn track_messages(
 
     loop {
         match MongoMessage::from_reader(&mut client_stream, log_mongo_messages, collect_tracing_data).await {
-            Ok((hdr, msg)) => {
-                tracker.track_client_request(&hdr, &msg);
-            },
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                // XXX: might still want to process server response
-                return Ok(());
-            },
+            Ok((hdr, msg)) => tracker.track_client_request(&hdr, &msg),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => {
-                error!("Client stream processing failed: {}", e);
+                error!("Client stream processing error: {}", e);
                 return Err(e);
             }
         }
 
         match MongoMessage::from_reader(&mut server_stream, log_mongo_messages, collect_tracing_data).await {
-            Ok((hdr, msg)) => {
-                tracker.track_server_response(hdr, msg);
-            },
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                // XXX: Should check client once more?
-                return Ok(());
-            },
+            Ok((hdr, msg)) => tracker.track_server_response(hdr, msg),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => {
                 error!("Server stream processing failed: {}", e);
                 return Err(e);
