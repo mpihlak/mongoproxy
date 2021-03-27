@@ -109,10 +109,10 @@ def main():
     # Generate some seed data
     kittens.delete_many({})
     for i in range(NUM_KITTENS):
-        kittens.insert_one({"name": "Purry", "s": i})
+        kittens.insert_one({"name": "Purry", "id": i})
 
     # XXX: Make this a cmdline option
-    test_big_documents = True
+    test_big_documents = False
 
     if test_big_documents:
         # Insert one that is close to MongoDb limit
@@ -163,10 +163,19 @@ def main():
         with MetricsDelta('UpdateOne', 'mongoproxy_documents_changed_total', '_sum') as md:
             with tracer.start_span(md.name, root_span) as span:
                 kittens.update_one(
-                    {"name": "Purry", "$comment": span_as_text(span) },
+                    {"name": "Purry", "id": 0, "$comment": span_as_text(span) },
                     {"$set": { "name": "Furry" }}
                 )
             md.assert_metric_value({'op': 'update', **kitten_labels}, 1)
+
+        # Update one document - should be a NOP
+        with MetricsDelta('UpdateNone', 'mongoproxy_documents_changed_total', '_sum') as md:
+            with tracer.start_span(md.name, root_span) as span:
+                kittens.update_one(
+                    {"name": "Purry", "id": 0, "$comment": span_as_text(span) },
+                    {"$set": { "name": "Furry" }}
+                )
+            md.assert_metric_value({'op': 'update', **kitten_labels}, 0)
 
         # Delete one document
         with MetricsDelta('DeleteOne', 'mongoproxy_documents_changed_total', '_sum') as md:

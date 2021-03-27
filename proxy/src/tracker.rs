@@ -90,7 +90,7 @@ lazy_static! {
     static ref DOCUMENTS_CHANGED_TOTAL: HistogramVec =
         register_histogram_vec!(
             "mongoproxy_documents_changed_total",
-            "Number of documents matched by insert, update or delete operations",
+            "Number of documents changed by insert, update or delete operations",
             OP_LABELS,
             vec![1.0, 10.0, 100.0, 1000.0, 10000.0 ]).unwrap();
 
@@ -587,6 +587,7 @@ impl MongoStatsTracker{
 
             let mut n_docs_returned = None;
             let mut n_docs_changed = None;
+            let mut n_docs_matched = None;
 
             if let Some(n) = section.get_i32("docs_returned") {
                 // Number of documents returned from a cursor operation (find, getMore, etc)
@@ -601,16 +602,18 @@ impl MongoStatsTracker{
             } else if client_request.op == "update" {
                 // Update uses n_modified to indicate number of docs changed
                 // n_upserted for number of new documents inserted
+                // n for number of documents matches by the update
                 let n_modified = section.get_i32("n_modified").unwrap_or(0);
                 let n_upserted = section.get_i32("n_upserted").unwrap_or(0);
+                n_docs_matched = section.get_i32("n");
                 n_docs_changed = Some(n_modified + n_upserted);
             } else if section.contains_key("n") {
                 // Lump the rest of the update operations together
                 n_docs_changed = Some(section.get_i32("n").unwrap_or(0));
             }
 
-            debug!("client_request: op={} coll={} n_docs_returned={:?} n_docs_changed={:?}",
-                client_request.op, client_request.coll, n_docs_returned, n_docs_changed);
+            debug!("client_request: op={} coll={} n_docs_returned={:?} n_docs_changed={:?} n_docs_matched={:?}",
+                client_request.op, client_request.coll, n_docs_returned, n_docs_changed, n_docs_matched);
 
             if let Some(n) = n_docs_returned {
                 if let Some(span) = &mut client_request.span {
@@ -620,6 +623,19 @@ impl MongoStatsTracker{
                     DOCUMENTS_RETURNED_TOTAL
                         .with_label_values(&self.label_values(&client_request))
                         .observe(n as f64);
+                }
+            }
+
+            if let Some(n) = n_docs_matched {
+                if let Some(span) = &mut client_request.span {
+                    span.set_attribute(KeyValue::new("db.documents_matched", n as i64));
+                    if n_docs_changed.is_none() {
+                        // This must have been a NOP update operation so let's make it explicit
+                        // that nothing was actually updated so that it gets recording in the
+                        // traces. We don't probably care about this as a metric, so leave it out
+                        // for now.
+                        n_docs_changed = Some(0);
+                    }
                 }
             }
 
