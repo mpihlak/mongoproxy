@@ -1,6 +1,6 @@
 [package]
 name = "mongoproxy"
-version = "0.5.12"
+version = "0.5.13"
 authors = ["mpihlak <martin.pihlak@starship.co>"]
 edition = "2018"
 
