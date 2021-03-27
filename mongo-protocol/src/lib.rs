@@ -35,7 +35,9 @@ lazy_static! {
             .match_exact("/q/$comment", "comment")
             .match_exact("/query/$comment", "comment")
             .match_exact("/filter/$comment", "comment")
-            // TODO: support comments also in other pipeline steps
+            // TODO: support comments also in other array positions and pipeline steps
+            .match_exact("/updates/0/q/$comment", "comment")
+            .match_exact("/deletes/0/q/$comment", "comment")
             .match_exact("/pipeline/0/$match/$comment", "comment")
             .match_exact("/client/application/name", "app_name")
             // Workaround for Elixir Mongo driver that has an extra nested "client"
