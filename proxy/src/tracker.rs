@@ -6,7 +6,7 @@ use std::time::{Instant};
 use std::collections::{HashMap, HashSet};
 
 use tracing::{debug, warn, info_span};
-use prometheus::{CounterVec,HistogramVec,Gauge};
+use prometheus::{Counter, CounterVec, HistogramVec, Gauge};
 
 use opentelemetry::trace::{Tracer, SpanKind, TraceContextExt};
 use opentelemetry::trace::Span as _Span;
@@ -17,12 +17,6 @@ use async_bson::Document;
 
 // Common labels for all op metrics
 const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server"];
-
-// Allow this many server responses to wait for a matching client request
-const MAX_OUTSTANDING_SERVER_RESPONSES: usize = 1024;
-
-// Allow this many client requests to wait for a matching server response
-const MAX_OUTSTANDING_CLIENT_REQUESTS: usize = 1024;
 
 lazy_static! {
     static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
@@ -42,30 +36,6 @@ lazy_static! {
             "mongoproxy_unsupported_op_name_count_total",
             "Number of unrecognized op names in MongoDb response",
             &["op"]).unwrap();
-
-    static ref SERVER_RESPONSE_HASHMAP_SIZE: Gauge =
-        register_gauge!(
-            "mongoproxy_server_response_hashmap_size_total",
-            "Size of the buffered responses, close to 0 is good"
-            ).unwrap();
-
-    static ref SERVER_RESPONSE_HASHMAP_FLUSHES: Gauge =
-        register_gauge!(
-            "mongoproxy_server_response_hashmap_flushes_total",
-            "Number of times the response hashmap was flushed to make room"
-            ).unwrap();
-
-    static ref CLIENT_REQUEST_HASHMAP_SIZE: Gauge =
-        register_gauge!(
-            "mongoproxy_client_request_hashmap_size_total",
-            "Response to request mapping HashMap size"
-            ).unwrap();
-
-    static ref CLIENT_REQUEST_HASHMAP_FLUSHES: Gauge =
-        register_gauge!(
-            "mongoproxy_client_request_hashmap_flushes_total",
-            "Number of times the request hashmap was flushed to make room"
-            ).unwrap();
 
     static ref CURSOR_TRACE_PARENT_HASHMAP_CAPACITY: Gauge =
         register_gauge!(
@@ -113,6 +83,12 @@ lazy_static! {
             "mongoproxy_server_response_errors_total",
             "Number of non-ok server responses",
             OP_LABELS).unwrap();
+
+    static ref SERVER_RESPONSE_REQUEST_MISMATCH: Counter =
+        register_counter!(
+            "mongoproxy_server_response_request_mismatch_total",
+            "Number of times mongoproxy was unable to match server response to a client request"
+        ).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -384,8 +360,7 @@ pub struct MongoStatsTracker {
     server_addr_sa:         std::net::SocketAddr,
     client_addr:            String,
     client_application:     String,
-    client_request_map:     HashMap<u32, ClientRequest>,
-    server_response_map:    HashMap<u32, (MsgHeader, MongoMessage)>,
+    client_request_hdr:     Option<(ClientRequest, MsgHeader)>,
     replicaset:             String,
     server_host:            String,
     app:                    AppConfig,
@@ -410,8 +385,7 @@ impl MongoStatsTracker{
             client_addr: client_addr.to_string(),
             server_addr: server_addr.to_string(),
             server_addr_sa,
-            client_request_map: HashMap::new(),
-            server_response_map: HashMap::new(),
+            client_request_hdr: None,
             client_application: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
@@ -443,28 +417,13 @@ impl MongoStatsTracker{
             }
         }
 
-        let mut req = ClientRequest::from(&self, hdr.message_length, &msg);
+        let req = ClientRequest::from(&self, hdr.message_length, &msg);
 
         // If we're tracking cursors for tracing purposes then also handle
         // the cleanup.
         self.maybe_kill_cursors(&req.op, &msg);
 
-        // If we're over the limit evict N oldest entries
-        if self.client_request_map.len() >= MAX_OUTSTANDING_CLIENT_REQUESTS {
-            warn!("{} outstanding client requests, flushing.", self.client_request_map.len());
-            self.client_request_map.clear();
-            CLIENT_REQUEST_HASHMAP_FLUSHES.inc();
-        }
-
-        // Sometimes the requests and responses arrive out of order. Deal with that
-        // by checking for any "unresolved" responses here.
-        if let Some((hdr, msg)) = self.server_response_map.remove(&hdr.request_id) {
-            self.observe_server_response_to(&hdr, &msg, &mut req);
-        } else {
-            self.client_request_map.insert(hdr.request_id, req);
-        }
-
-        CLIENT_REQUEST_HASHMAP_SIZE.set(self.client_request_map.len() as f64);
+        self.client_request_hdr = Some((req, hdr.clone()))
     }
 
     // Handle "killCursors" to clean up the trace parent hash map
@@ -513,20 +472,19 @@ impl MongoStatsTracker{
             return;
         }
 
-        // If the request is already here, process the response immediately. Otherwise
-        // put it aside so that it will processed later when the client request arrives.
-
-        if let Some(mut client_request) = self.client_request_map.remove(&hdr.response_to) {
-            self.observe_server_response_to(&hdr, &msg, &mut client_request);
-        } else if self.server_response_map.len() < MAX_OUTSTANDING_SERVER_RESPONSES {
-            self.server_response_map.insert(hdr.response_to, (hdr, msg));
+        if let Some((mut client_request, req_hdr)) = self.client_request_hdr.take() {
+            if hdr.response_to != req_hdr.request_id {
+                // And if this starts to happen, then we need to go back to the HashMap of requests ...
+                warn!("Server response to {} does not match client request {}",
+                    hdr.response_to, req_hdr.request_id);
+                SERVER_RESPONSE_REQUEST_MISMATCH.inc();
+            } else {
+                self.observe_server_response_to(&hdr, &msg, &mut client_request);
+            }
         } else {
-            warn!("{} outstanding server responses, flushing.", self.server_response_map.len());
-            self.server_response_map.clear();
-            SERVER_RESPONSE_HASHMAP_FLUSHES.inc();
+            warn!("No client request found for {:?}", hdr);
+            SERVER_RESPONSE_REQUEST_MISMATCH.inc();
         }
-
-        SERVER_RESPONSE_HASHMAP_SIZE.set(self.server_response_map.len() as f64);
     }
 
     fn observe_server_response_to(
