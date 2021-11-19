@@ -16,20 +16,20 @@ use opentelemetry::{KeyValue};
 use async_bson::Document;
 
 // Common labels for all op metrics
-const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server"];
+const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server", "username"];
 
 lazy_static! {
     static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
             "mongoproxy_app_connections_established_total",
             "Total number of client connections established",
-            &["app"]).unwrap();
+            &["app", "username"]).unwrap();
 
     static ref APP_DISCONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
             "mongoproxy_app_disconnections_total",
             "Total number of client disconnections",
-            &["app"]).unwrap();
+            &["app", "username"]).unwrap();
 
     static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
         register_counter_vec!(
@@ -360,9 +360,11 @@ pub struct MongoStatsTracker {
     server_addr_sa:         std::net::SocketAddr,
     client_addr:            String,
     client_application:     String,
+    client_username:        String,
     client_request_hdr:     Option<(ClientRequest, MsgHeader)>,
     replicaset:             String,
     server_host:            String,
+    have_hello:             bool,
     app:                    AppConfig,
 }
 
@@ -370,7 +372,7 @@ impl Drop for MongoStatsTracker {
     fn drop(&mut self) {
         if !self.client_application.is_empty() {
             APP_DISCONNECTION_COUNT_TOTAL
-                .with_label_values(&[&self.client_application])
+                .with_label_values(&[&self.client_application, &self.client_username])
                 .inc();
         }
     }
@@ -387,6 +389,8 @@ impl MongoStatsTracker{
             server_addr_sa,
             client_request_hdr: None,
             client_application: String::from(""),
+            client_username: String::from(""),
+            have_hello: false,
             replicaset: String::from(""),
             server_host: String::from(""),
             app,
@@ -408,12 +412,21 @@ impl MongoStatsTracker{
             return;
         }
 
-        if self.client_application.is_empty() {
-            if let Some(app_name) = extract_app_name(&msg) {
-                self.client_application = app_name.to_owned();
-                APP_CONNECTION_COUNT_TOTAL
-                    .with_label_values(&[&self.client_application])
-                    .inc();
+        // The first isMaster message from client contains the connection metadata
+        // including the optional application name and user. These do not appear
+        // in subsequent "hello" or "isMaster" messages so grab them here and use
+        // throughout the rest of the connection.
+        if let MongoMessage::Query(m) = msg {
+            if let Some(op) = m.query.get_str("op") {
+                if !self.have_hello && (op == "isMaster" || op == "ismaster" || op == "hello") {
+                    self.client_application = m.query.get_str("app_name").unwrap_or("").to_owned();
+                    self.client_username = m.query.get_str("username").unwrap_or("").to_owned();
+                    self.have_hello = true;
+
+                    APP_CONNECTION_COUNT_TOTAL
+                        .with_label_values(&[&self.client_application, &self.client_username])
+                        .inc();
+                }
             }
         }
 
@@ -449,7 +462,7 @@ impl MongoStatsTracker{
     }
 
     // Label values for common metrics
-    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 7] {
+    fn label_values<'a>(&'a self, req: &'a ClientRequest) -> [&'a str; 8] {
         [
             &self.client_addr,
             &self.client_application,
@@ -458,6 +471,7 @@ impl MongoStatsTracker{
             &req.db,
             &self.replicaset,
             &self.server_host,
+            &self.client_username,
         ]
     }
 
@@ -670,16 +684,4 @@ impl MongoStatsTracker{
         }
     }
 
-}
-
-/// Extract `appname` from MongoDb `isMaster` query
-fn extract_app_name(msg: &MongoMessage) -> Option<&str> {
-    if let MongoMessage::Query(m) = msg {
-        if let Some(op) = m.query.get_str("op") {
-            if op == "isMaster" || op == "ismaster" {
-                return m.query.get_str("app_name");
-            }
-        }
-    }
-    None
 }
