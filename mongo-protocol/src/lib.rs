@@ -40,7 +40,10 @@ lazy_static! {
             .match_exact("/deletes/0/q/$comment", "comment")
             .match_exact("/pipeline/0/$match/$comment", "comment")
             .match_exact("/client/application/name", "app_name")
+            // This contains the username for "isMaster" messages from client
+            .match_exact("/saslSupportedMechs", "username")
             // Workaround for Elixir Mongo driver that has an extra nested "client"
+            .match_exact("/client/client/application/name", "app_name")
             .match_exact("/client/client/application/name", "app_name")
             .match_exact("/cursor/id", "cursor_id")
             .match_array_len("/cursor/firstBatch", "docs_returned")
