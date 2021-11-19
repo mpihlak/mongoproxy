@@ -353,10 +353,10 @@ async fn proxy_bytes(
 // Process the mpsc channel as a byte stream, parsing MongoDb messages
 // and sending them off to a tracker.
 //
-// XXX: We assume here that client always speaks first, followed by a response from the server,
-// then the client goes again and then the server, and so on. This makes it easy to reason about
-// things, and responses are never processes before the request. However this is prone to break
-// when Mongo changes the protocol.
+// We assume here that client always speaks first, followed by a response from the server, then the
+// client goes again and then the server, and so on. This makes it easy to reason about things, and
+// responses are never processed before the request. However this is prone to break if Mongo
+// changes this behavior in the protocol.
 //
 async fn track_mongo_messages(
     client_rx: mpsc::Receiver<BufBytes>,
