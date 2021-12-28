@@ -364,7 +364,6 @@ pub struct MongoStatsTracker {
     client_request_hdr:     Option<(ClientRequest, MsgHeader)>,
     replicaset:             String,
     server_host:            String,
-    have_hello:             bool,
     app:                    AppConfig,
 }
 
@@ -390,7 +389,6 @@ impl MongoStatsTracker{
             client_request_hdr: None,
             client_application: String::from(""),
             client_username: String::from(""),
-            have_hello: false,
             replicaset: String::from(""),
             server_host: String::from(""),
             app,
@@ -407,27 +405,15 @@ impl MongoStatsTracker{
         let span = info_span!("track_client_request");
         let _ = span.enter();
 
-        // Ignore useless messages
-        if let MongoMessage::None = msg {
-            return;
-        }
-
-        // The first isMaster message from client contains the connection metadata
-        // including the optional application name and user. These do not appear
-        // in subsequent "hello" or "isMaster" messages so grab them here and use
-        // throughout the rest of the connection.
-        if let MongoMessage::Query(m) = msg {
-            if let Some(op) = m.query.get_str("op") {
-                if !self.have_hello && (op == "isMaster" || op == "ismaster" || op == "hello") {
-                    self.client_application = m.query.get_str("app_name").unwrap_or("").to_owned();
-                    self.client_username = m.query.get_str("username").unwrap_or("").to_owned();
-                    self.have_hello = true;
-
-                    APP_CONNECTION_COUNT_TOTAL
-                        .with_label_values(&[&self.client_application, &self.client_username])
-                        .inc();
-                }
+        match msg {
+            MongoMessage::Query(m) => {
+                self.maybe_extract_connection_metadata(&m.query);
+            },
+            MongoMessage::Msg(m) if !m.documents.is_empty() => {
+                self.maybe_extract_connection_metadata(&m.documents[0]);
             }
+            MongoMessage::None => return, // Ignore useless messages
+            _ => {}
         }
 
         let req = ClientRequest::from(&self, hdr.message_length, &msg);
@@ -437,6 +423,26 @@ impl MongoStatsTracker{
         self.maybe_kill_cursors(&req.op, &msg);
 
         self.client_request_hdr = Some((req, hdr.clone()))
+    }
+
+    // The first isMaster message from client contains the connection metadata including the
+    // optional application name and user. These do not appear in subsequent "hello" or "isMaster"
+    // messages so grab them in the first message they appear in and use throughout the rest of the
+    // connection.
+    fn maybe_extract_connection_metadata(&mut self, doc: &Document) {
+        if !self.client_application.is_empty() && !self.client_username.is_empty() {
+            return
+        }
+        if let Some(op) = doc.get_str("op") {
+            if op == "isMaster" || op == "ismaster" || op == "hello" {
+                self.client_application = doc.get_str("app_name").unwrap_or("").to_owned();
+                self.client_username = doc.get_str("username").unwrap_or("").to_owned();
+
+                APP_CONNECTION_COUNT_TOTAL
+                    .with_label_values(&[&self.client_application, &self.client_username])
+                    .inc();
+            }
+        }
     }
 
     // Handle "killCursors" to clean up the trace parent hash map
