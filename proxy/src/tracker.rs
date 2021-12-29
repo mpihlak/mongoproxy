@@ -23,7 +23,15 @@ lazy_static! {
         register_counter_vec!(
             "mongoproxy_app_connections_established_total",
             "Total number of client connections established",
-            &["app", "username"]).unwrap();
+            &["app"]).unwrap();
+
+    // This is a separate counter because the app and user label values arrive at different 
+    // times (if at all). So there is no good way to determine if we have both.
+    static ref USER_CONNECTION_COUNT_TOTAL: CounterVec =
+        register_counter_vec!(
+            "mongoproxy_user_connections_established_total",
+            "Total number of client connections established",
+            &["username"]).unwrap();
 
     static ref APP_DISCONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -430,17 +438,24 @@ impl MongoStatsTracker{
     // messages so grab them in the first message they appear in and use throughout the rest of the
     // connection.
     fn maybe_extract_connection_metadata(&mut self, doc: &Document) {
-        if !self.client_application.is_empty() && !self.client_username.is_empty() {
-            return
-        }
         if let Some(op) = doc.get_str("op") {
             if op == "isMaster" || op == "ismaster" || op == "hello" {
-                self.client_application = doc.get_str("app_name").unwrap_or("").to_owned();
-                self.client_username = doc.get_str("username").unwrap_or("").to_owned();
-
-                APP_CONNECTION_COUNT_TOTAL
-                    .with_label_values(&[&self.client_application, &self.client_username])
-                    .inc();
+                if self.client_application.is_empty() {
+                    if let Some(app_name) = doc.get_str("app_name") {
+                        self.client_application = app_name.to_owned();
+                        APP_CONNECTION_COUNT_TOTAL
+                            .with_label_values(&[&self.client_application])
+                            .inc();
+                    }
+                }
+                if self.client_username.is_empty() {
+                    if let Some(username) = doc.get_str("username") {
+                        self.client_username = username.to_owned();
+                        USER_CONNECTION_COUNT_TOTAL
+                            .with_label_values(&[&self.client_username])
+                            .inc();
+                    }
+                }
             }
         }
     }

@@ -565,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "mongoproxy"
-version = "0.5.16"
+version = "0.5.17"
 dependencies = [
  "async-bson",
  "bson",

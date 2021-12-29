@@ -12,3 +12,5 @@ docker-build.sh
 *.pyc
 */__pycache__/*
 x
+tags
+testing/node-mongo
