@@ -25,7 +25,7 @@ lazy_static! {
             "Total number of client connections established",
             &["app"]).unwrap();
 
-    // This is a separate counter because the app and user label values arrive at different 
+    // This is a separate counter because the app and user label values arrive at different
     // times (if at all). So there is no good way to determine if we have both.
     static ref USER_CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
