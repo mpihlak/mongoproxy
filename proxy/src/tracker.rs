@@ -114,7 +114,7 @@ lazy_static! {
         ["isMaster", "ismaster", "ping", "whatsmyuri", "buildInfo", "buildinfo", "drop",
         "saslStart", "saslContinue", "getLog", "getFreeMonitoringStatus", "killCursors",
         "listDatabases", "listIndexes", "createIndexes", "listCollections", "replSetGetStatus",
-        "endSessions", "dropDatabase", "_id", "q", "getMore"].iter().cloned().collect();
+        "endSessions", "dropDatabase", "_id", "q", "getMore", "hello"].iter().cloned().collect();
 
     // Operations that have collection name as op value
     static ref MONGODB_COLLECTION_OPS: HashSet<&'static str> =
