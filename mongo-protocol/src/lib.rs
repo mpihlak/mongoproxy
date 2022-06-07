@@ -474,7 +474,7 @@ impl MsgOpMsg {
         writer.write_u32::<LittleEndian>(seq_len as u32)?;
         writer.write_all(seq_id.as_bytes())?;
         writer.write_u8(0)?;    // terminator for the cstring
-        writer.write_all(&doc_buf[..])?;
+        writer.write_all(doc_buf)?;
 
         Ok(())
     }

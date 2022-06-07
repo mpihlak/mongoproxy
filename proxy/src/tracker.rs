@@ -171,7 +171,7 @@ impl ClientRequest {
                     if MONGODB_COLLECTION_OPS.contains(opname) {
                         collection_op = Some(opname);
                         coll_name_from_op = Some(s.get_str("op_value").unwrap_or(""));
-                    } if OTHER_MONGODB_OPS.contains(opname) {
+                    } else if OTHER_MONGODB_OPS.contains(opname) {
                         other_op = Some(opname);
                         coll_name_from_param = Some(s.get_str("collection").unwrap_or(""));
                     } else {
@@ -185,15 +185,13 @@ impl ClientRequest {
 
                 op = if let Some(opname) = collection_op {
                     opname.to_owned()
+                } else if let Some(opname) = other_op {
+                        opname.to_owned()
                 } else {
-                    if let Some(opname) = other_op {
-                        opname.to_owned()
-                    } else {
-                        let opname = unknown_op.unwrap_or("<no-op>");
-                        warn!("unsupported op: {}", opname);
-                        UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[&opname]).inc();
-                        opname.to_owned()
-                    }
+                    let opname = unknown_op.unwrap_or("<no-op>");
+                    warn!("unsupported op: {}", opname);
+                    UNSUPPORTED_OPNAME_COUNTER.with_label_values(&[opname]).inc();
+                    opname.to_owned()
                 };
 
                 coll = if let Some(coll_name) = coll_name_from_op {
@@ -206,7 +204,7 @@ impl ClientRequest {
                 // out of one of the documents.
                 for s in m.documents.iter() {
                     if let Some((ok_cursor_id, ok_span)) = ClientRequest::maybe_create_span(
-                            &tracker, &m, &db, &coll, &op, s) {
+                            tracker, m, &db, &coll, &op, s) {
                         cursor_id = ok_cursor_id;
                         span = Some(ok_span);
                         break;
@@ -221,7 +219,7 @@ impl ClientRequest {
                 // The database name can be obtained from the message itself, however the collection name
                 // is *not* actually in the full_collection_name, but needs to be obtained from the payload
                 // query. There too are multiple options (op_value or collection)
-                let pos = m.full_collection_name.find('.').unwrap_or_else(|| m.full_collection_name.len());
+                let pos = m.full_collection_name.find('.').unwrap_or(m.full_collection_name.len());
                 db = m.full_collection_name[..pos].to_owned();
 
                 if let Some(val) = m.query.get_str("collection") {
@@ -424,11 +422,11 @@ impl MongoStatsTracker{
             _ => {}
         }
 
-        let req = ClientRequest::from(&self, hdr.message_length, &msg);
+        let req = ClientRequest::from(self, hdr.message_length, msg);
 
         // If we're tracking cursors for tracing purposes then also handle
         // the cleanup.
-        self.maybe_kill_cursors(&req.op, &msg);
+        self.maybe_kill_cursors(&req.op, msg);
 
         self.client_request_hdr = Some((req, hdr.clone()))
     }
@@ -526,17 +524,17 @@ impl MongoStatsTracker{
         &mut self,
         hdr: &MsgHeader,
         msg: &MongoMessage,
-        mut client_request: &mut ClientRequest,
+        client_request: &mut ClientRequest,
     ) {
         if client_request.is_collection_op() {
             SERVER_RESPONSE_LATENCY_SECONDS
-                .with_label_values(&self.label_values(&client_request))
+                .with_label_values(&self.label_values(client_request))
                 .observe(client_request.message_time.elapsed().as_secs_f64());
             SERVER_RESPONSE_SIZE_TOTAL
-                .with_label_values(&self.label_values(&client_request))
+                .with_label_values(&self.label_values(client_request))
                 .observe(hdr.message_length as f64);
             CLIENT_REQUEST_SIZE_TOTAL
-                .with_label_values(&self.label_values(&client_request))
+                .with_label_values(&self.label_values(client_request))
                 .observe(client_request.message_length as f64);
         }
 
@@ -545,14 +543,14 @@ impl MongoStatsTracker{
         // The only interesting messages here are OP_MSG and OP_REPLY.
         match msg {
             MongoMessage::Msg(m) => {
-                self.process_response_documents(&mut client_request, m.get_documents());
+                self.process_response_documents(client_request, m.get_documents());
             },
             MongoMessage::Reply(r) => {
                 for doc in &r.documents {
                     // The first isMaster response is an OP_REPLY so we need to look at it
                     self.try_parsing_replicaset(doc);
                 }
-                self.process_response_documents(&mut client_request, r.get_documents());
+                self.process_response_documents(client_request, r.get_documents());
             },
             MongoMessage::Compressed(m) => {
                 debug!("Compressed message: {:?}", m);
@@ -573,7 +571,7 @@ impl MongoStatsTracker{
                         span.set_attribute(KeyValue::new("error", true));
                     }
                     SERVER_RESPONSE_ERRORS_TOTAL
-                        .with_label_values(&self.label_values(&client_request))
+                        .with_label_values(&self.label_values(client_request))
                         .inc();
                 }
             }
@@ -614,7 +612,7 @@ impl MongoStatsTracker{
                 }
                 if client_request.is_collection_op() {
                     DOCUMENTS_RETURNED_TOTAL
-                        .with_label_values(&self.label_values(&client_request))
+                        .with_label_values(&self.label_values(client_request))
                         .observe(n as f64);
                 }
             }
@@ -638,7 +636,7 @@ impl MongoStatsTracker{
                 }
                 if client_request.is_collection_op() {
                     DOCUMENTS_CHANGED_TOTAL
-                        .with_label_values(&self.label_values(&client_request))
+                        .with_label_values(&self.label_values(client_request))
                         .observe(f64::from(n.abs()));
                 }
             }

@@ -1,4 +1,4 @@
-FROM rust:1.50-buster as builder
+FROM rust:1.61-buster as builder
 
 WORKDIR /build/mongoproxy
 

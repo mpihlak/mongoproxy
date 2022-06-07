@@ -338,7 +338,7 @@ impl<'a> DocumentParser<'a> {
             return &mut self.prefix_matchers[pos].1
         }
 
-        self.prefix_matchers.push((&prefix, Matcher::new()));
+        self.prefix_matchers.push((prefix, Matcher::new()));
 
         // Sort the matchers so that we don't have to mutate self in parser
         // Assuming that this won't get called too often.
@@ -370,7 +370,7 @@ impl<'a> DocumentParser<'a> {
         prefix: &'x str,
         position: u32,
         prefix_matcher: Option<&'x Matcher>,
-        mut doc: &'x mut Document,
+        doc: &'x mut Document,
     ) -> ParserResult<'x>
     {
         pin_maybe(async move {
@@ -425,7 +425,7 @@ impl<'a> DocumentParser<'a> {
                 let elem_value = match elem_type {
                     0x01 => {
                         // A float
-                        let mut buf = [0 as u8; 8];
+                        let mut buf = [0_u8; 8];
                         rdr.read_exact(&mut buf).await?;
                         BsonValue::Float(f64::from_le_bytes(buf))
                     }
@@ -446,7 +446,7 @@ impl<'a> DocumentParser<'a> {
                         let doc_len = rdr.read_i32_le().await?;
 
                         if want_this_value || self.want_prefix(&prefix_name) {
-                            self.parse_internal(rdr, &prefix_name, 0, exact_matcher, &mut doc).await?;
+                            self.parse_internal(rdr, &prefix_name, 0, exact_matcher, doc).await?;
                             BsonValue::Placeholder("<nested document>")
                         } else {
                             skip_bytes(&mut rdr, doc_len as usize - 4).await?;
@@ -464,16 +464,13 @@ impl<'a> DocumentParser<'a> {
                         BsonValue::None
                     }
                     0x07 => {
-                        let mut bytes = [0 as u8; 12];
+                        let mut bytes = [0_u8; 12];
                         rdr.read_exact(&mut bytes).await?;
                         BsonValue::ObjectId(bytes)
                     }
                     0x08 => {
                         // Boolean
-                        let val = match rdr.read_u8().await? {
-                            0x00 => false,
-                            _ => true,
-                        };
+                        let val = !matches!(rdr.read_u8().await?, 0x00);
                         BsonValue::Boolean(val)
                     }
                     0x09 => {

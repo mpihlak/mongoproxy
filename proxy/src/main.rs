@@ -150,7 +150,7 @@ async fn main() {
     let proxy_spec = matches.value_of("proxy").unwrap();
     let (local_hostport, remote_hostport) = parse_proxy_addresses(proxy_spec).unwrap();
 
-    let (tracer, _uninstall) = jaeger_tracing::init_tracer(enable_jaeger, &service_name, jaeger_addr);
+    let (tracer, _uninstall) = jaeger_tracing::init_tracer(enable_jaeger, service_name, jaeger_addr);
 
     let app = AppConfig::new(
         tracer,
@@ -159,8 +159,8 @@ async fn main() {
 
     MONGOPROXY_RUNTIME_INFO.with_label_values(&[
         crate_version!(),
-        &proxy_spec,
-        &service_name,
+        proxy_spec,
+        service_name,
         if log_mongo_messages { "true" } else { "false" },
         if enable_jaeger { "true" } else { "false" } ],
     ).inc();
