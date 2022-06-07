@@ -559,8 +559,8 @@ pub struct MsgOpUpdate {
 
 impl fmt::Display for MsgOpUpdate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_UPDATE flags: {}, collection: {}",
-               self.flags, self.full_collection_name)
+        write!(f, "OP_UPDATE flags: {}, collection: {}, selector: {}, update: {}",
+               self.flags, self.full_collection_name, self.selector, self.update)
     }
 }
 
@@ -587,8 +587,8 @@ pub struct MsgOpDelete {
 
 impl fmt::Display for MsgOpDelete {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "OP_DELETE flags: {}, collection: {}",
-               self.flags, self.full_collection_name)
+        write!(f, "OP_DELETE flags: {}, collection: {}, selector: {}",
+               self.flags, self.full_collection_name, self.selector)
     }
 }
 
