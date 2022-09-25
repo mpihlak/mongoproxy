@@ -470,8 +470,8 @@ impl<'a> DocumentParser<'a> {
                     }
                     0x08 => {
                         // Boolean
-                        let val = !matches!(rdr.read_u8().await?, 0x00);
-                        BsonValue::Boolean(val)
+                        let val = rdr.read_u8().await?;
+                        BsonValue::Boolean(val != 0x00)
                     }
                     0x09 => {
                         // UTC Datetime
