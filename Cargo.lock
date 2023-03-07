@@ -389,9 +389,9 @@ checksum = "c4a1e36c821dbe04574f602848a19f742f4fb3c98d40449f11bcad18d6b17421"
 
 [[package]]
 name = "hyper"
-version = "0.14.8"
+version = "0.14.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3f71a7eea53a3f8257a7b4795373ff886397178cd634430ea94e12d7fe4fe34"
+checksum = "13f67199e765030fa08fe0bd581af683f0d5bc04ea09c2b1102012c5fb90e7fd"
 dependencies = [
  "bytes 1.0.1",
  "futures-channel",
@@ -403,7 +403,7 @@ dependencies = [
  "httparse",
  "httpdate",
  "itoa",
- "pin-project 1.0.2",
+ "pin-project-lite",
  "socket2",
  "tokio",
  "tower-service",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "mongoproxy"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "async-bson",
  "bson",
@@ -702,9 +702,9 @@ dependencies = [
 
 [[package]]
 name = "pin-project-lite"
-version = "0.2.0"
+version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b063f57ec186e6140e2b8b6921e5f1bd89c7356dda5b33acc5401203ca6131c"
+checksum = "e0a7ae3ac2f1173085d398531c705756c94a4c56843785df85a60c1a0afac116"
 
 [[package]]
 name = "pin-utils"
