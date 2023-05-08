@@ -1,4 +1,4 @@
-FROM rust:1.61-buster as builder
+FROM --platform=$BUILDPLATFORM rust:1.61-buster as builder
 
 WORKDIR /build/mongoproxy
 
@@ -10,7 +10,7 @@ COPY async-bson/ ./async-bson
 RUN cargo build --release
 RUN cargo test --release
 
-FROM debian:buster-slim
+FROM --platform=$BUILDPLATFORM debian:buster-slim
 
 RUN apt-get update && apt-get install -y iptables
 RUN update-alternatives --set iptables /usr/sbin/iptables-legacy
