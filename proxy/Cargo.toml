@@ -1,6 +1,6 @@
 [package]
 name = "mongoproxy"
-version = "0.5.23"
+version = "0.5.24"
 authors = ["mpihlak <martin.pihlak@starship.co>"]
 edition = "2018"
 
@@ -25,4 +25,4 @@ opentelemetry = { version="0.12", features = ["tokio-support"] }
 opentelemetry-jaeger = { version="0.11", features = ["tokio"] }
 mongo-protocol = { path="../mongo-protocol" }
 async-bson = { path="../async-bson" }
-regex = "1.4.2"
+regex = { version = "1.8.1", features = ["unicode-case"] }
