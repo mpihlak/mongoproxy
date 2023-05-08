@@ -1,4 +1,4 @@
-FROM rust:1.61-buster as builder
+FROM --platform=$BUILDPLATFORM rust:1.61-buster as builder
 
 WORKDIR /build/mongoproxy
 
@@ -6,6 +6,9 @@ COPY Cargo.* ./
 COPY proxy/ ./proxy
 COPY mongo-protocol/ ./mongo-protocol
 COPY async-bson/ ./async-bson
+
+# XXX
+RUN ulimit -a
 
 RUN cargo build --release
 RUN cargo test --release
