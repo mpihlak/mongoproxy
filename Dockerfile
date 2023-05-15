@@ -23,7 +23,6 @@ RUN xx-cargo build --release --target-dir ./
 
 FROM debian:buster-slim
 
-COPY --from=xx / /
 RUN apt-get update && apt-get install -y iptables
 RUN update-alternatives --set iptables /usr/sbin/iptables-legacy
 
