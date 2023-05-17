@@ -1,5 +1,7 @@
 FROM rust:1.61-buster as builder
 
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
 WORKDIR /build/mongoproxy
 
 COPY Cargo.* ./
