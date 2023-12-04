@@ -1,4 +1,10 @@
-FROM rust:1.61-buster as builder
+# Needed for rust cross compilation helper scripts.
+# https://github.com/tonistiigi/xx#rust
+FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
+
+FROM --platform=$BUILDPLATFORM rust:1.61-buster as builder
+
+COPY --from=xx / /
 
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
@@ -9,8 +15,13 @@ COPY proxy/ ./proxy
 COPY mongo-protocol/ ./mongo-protocol
 COPY async-bson/ ./async-bson
 
-RUN cargo build --release
+RUN apt-get update && apt-get install -y clang lld
+
 RUN cargo test --release
+ARG TARGETPLATFORM
+
+RUN xx-apt-get install -y xx-c-essentials
+RUN xx-cargo build --release --target-dir ./
 
 FROM debian:buster-slim
 
@@ -21,7 +32,7 @@ RUN adduser --uid 9999 --disabled-password --gecos '' mongoproxy
 USER mongoproxy
 
 WORKDIR /mongoproxy
-COPY --from=builder /build/mongoproxy/target/release/mongoproxy ./
+COPY --from=builder /build/mongoproxy/*/release/mongoproxy ./
 COPY iptables-init.sh .
 
 ENV MALLOC_ARENA_MAX 2
