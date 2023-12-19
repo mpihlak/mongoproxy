@@ -692,7 +692,7 @@ impl MongoStatsTracker{
 
     fn try_parsing_replicaset(&mut self, doc: &Document) {
         if let Some(op) = doc.get_str("op") {
-            if (op == "hosts") || (op == "helloOk") {
+            if (op == "hosts") || (op == "helloOk") || (op == "topologyVersion") {
                 if let Some(replicaset) = doc.get_str("replicaset") {
                     self.replicaset = replicaset.to_owned();
                 }
