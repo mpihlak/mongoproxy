@@ -1,4 +1,4 @@
-FROM rust:1.61-buster as builder
+FROM rust:1.74-bookworm as builder
 
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
@@ -12,7 +12,7 @@ COPY async-bson/ ./async-bson
 RUN cargo build --release
 RUN cargo test --release
 
-FROM debian:buster-slim
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y iptables
 RUN update-alternatives --set iptables /usr/sbin/iptables-legacy

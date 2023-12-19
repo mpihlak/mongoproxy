@@ -1,4 +1,4 @@
-FROM rust:1.61-buster as builder
+FROM rust:1.74-bookworm as builder
 
 WORKDIR /build/mongoproxy
 
@@ -9,10 +9,10 @@ COPY async-bson/ ./async-bson
 
 RUN cargo build
 
-FROM debian:buster
+FROM debian:bookworm
 
 RUN apt-get update
-RUN apt-get install -y sudo procps sysstat net-tools curl netcat iptables less
+RUN apt-get install -y sudo procps sysstat net-tools curl netcat-traditional iptables less
 RUN apt-get install -y heaptrack
 RUN apt-get install -y valgrind
 RUN apt-get install -y rust-gdb
