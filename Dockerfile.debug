@@ -1,5 +1,7 @@
 FROM rust:1.74-bookworm as builder
 
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
 WORKDIR /build/mongoproxy
 
 COPY Cargo.* ./
@@ -16,6 +18,7 @@ RUN apt-get install -y sudo procps sysstat net-tools curl netcat-traditional ipt
 RUN apt-get install -y heaptrack
 RUN apt-get install -y valgrind
 RUN apt-get install -y rust-gdb
+RUN apt-get install -y linux-perf
 
 RUN apt-get install -y iptables
 RUN update-alternatives --set iptables /usr/sbin/iptables-legacy
@@ -32,3 +35,5 @@ USER mongoproxy
 
 COPY --from=builder /build/mongoproxy/target/debug/mongoproxy ./
 COPY iptables-init.sh .
+
+ENV MALLOC_ARENA_MAX 2
