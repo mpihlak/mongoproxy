@@ -16,7 +16,7 @@ use tokio::io::{self, AsyncReadExt};
 use std::io::{Result, Write, Error, ErrorKind};
 
 #[macro_use] extern crate prometheus;
-use prometheus::{CounterVec};
+use prometheus::CounterVec;
 
 pub const HEADER_LENGTH: usize = 16;
 
