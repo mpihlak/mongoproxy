@@ -6,7 +6,7 @@ services:
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info
-    command: ./mongoproxy --proxy 27111:mongodb:27017 --enable-jaeger --jaeger-addr jaeger:6831
+    command: ./mongoproxy --proxy 27111:mongodb:27017 --enable-otlp --otlp-endpoint jaeger:4317
     ports:
       - "9898:9898"
       - "27111:27111"
@@ -29,7 +29,7 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
   jaeger:
     container_name: jaeger
-    image: jaegertracing/all-in-one:1.8
+    image: jaegertracing/all-in-one:1.60
     logging:
       driver: none
     ports:
@@ -38,3 +38,8 @@ services:
       - "5778:5778"
       - "16686:16686"
       - "14268:14268"
+      - "4317:4317"
+      - "4318:4318"
+      - "14250:14250"
+      - "14269:14269"
+      - "9411:9411"
