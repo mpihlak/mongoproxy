@@ -1,8 +1,8 @@
 use mongo_protocol::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
 use crate::jaeger_tracing;
-use crate::appconfig::{AppConfig};
+use crate::appconfig::AppConfig;
 
-use std::time::{Instant};
+use std::time::Instant;
 use std::collections::{HashMap, HashSet};
 
 use tracing::{debug, warn, info_span};
@@ -11,7 +11,7 @@ use prometheus::{Counter, CounterVec, HistogramVec, Gauge};
 use opentelemetry::trace::{Tracer, SpanKind, TraceContextExt};
 use opentelemetry::trace::Span as _Span;
 use opentelemetry::sdk::trace::Span;
-use opentelemetry::{KeyValue};
+use opentelemetry::KeyValue;
 
 use async_bson::Document;
 
