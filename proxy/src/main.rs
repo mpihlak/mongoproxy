@@ -7,6 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener,TcpStream};
 use tokio::net::tcp::{OwnedReadHalf,OwnedWriteHalf};
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::StreamReader;
 
@@ -25,11 +26,10 @@ use hyper::{
 
 use mongoproxy::jaeger_tracing;
 use mongoproxy::dstaddr;
-use mongoproxy::appconfig::{AppConfig};
-use mongoproxy::tracker::{MongoStatsTracker};
+use mongoproxy::appconfig::AppConfig;
+use mongoproxy::tracker::MongoStatsTracker;
 
-use mongo_protocol::{MongoMessage};
-
+use mongo_protocol::MongoMessage;
 
 type BufBytes = Result<bytes::BytesMut, io::Error>;
 
@@ -253,7 +253,7 @@ async fn run_accept_loop(local_addr: String, remote_addr: String, app: AppConfig
 //
 
 async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: AppConfig)
-    -> Result<(), io::Error>
+    -> Result<(), Box<dyn std::error::Error>>
 {
     info!("connecting to server: {}", server_addr);
     let timer = SERVER_CONNECT_TIME_SECONDS.with_label_values(&[server_addr]).start_timer();
@@ -279,38 +279,43 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let signal_client = client_tx.clone();
     let signal_server = server_tx.clone();
 
-    let tracker = MongoStatsTracker::new(
-        &client_addr,
-        &server_addr.to_string(),
-        server_addr,
-        app,
-    );
+    let mut task_set = JoinSet::new();
 
-    tokio::spawn(async move {
+    task_set.spawn(async move {
+        let tracker = MongoStatsTracker::new(
+            &client_addr,
+            &server_addr.to_string(),
+            server_addr,
+            app,
+        );
+
         track_mongo_messages(client_rx, server_rx, log_mongo_messages, tracing_enabled, tracker).await?;
         Ok::<(), io::Error>(())
     }.instrument(info_span!("tracker")));
 
-    // Now start proxying bytes between the client and the server.
-
     let (mut read_client, mut write_client) = client_stream.into_split();
     let (mut read_server, mut write_server) = server_stream.into_split();
 
-    let client_task = async {
+    task_set.spawn(async move {
         proxy_bytes(&mut read_client, &mut write_server, client_tx, signal_server).await?;
         Ok::<(), io::Error>(())
-    }.instrument(info_span!("client proxy"));
+    }.instrument(info_span!("client proxy")));
 
-    let server_task = async {
+    task_set.spawn(async move {
         proxy_bytes(&mut read_server, &mut write_client, server_tx, signal_client).await?;
         Ok::<(), io::Error>(())
-    }.instrument(info_span!("server proxy"));
+    }.instrument(info_span!("server proxy")));
 
-    match tokio::try_join!(client_task, server_task) {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
-        Err(e) => Err(e),
+    while let Some(res) = task_set.join_next().await {
+        if let Err(e) = res {
+            warn!("task completed with error, closing connection: {e}");
+            task_set.shutdown().await;
+            info!("all tasks finished.");
+            return Err(Box::new(e));
+        }
     }
+
+    Ok(())
 }
 
 // Move bytes between sockets, forking the byte stream into a mpsc channel
@@ -344,8 +349,9 @@ async fn proxy_bytes(
                 }
             }
         } else {
-            // EOF on read, return Err to signal try_join! to return
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "EOF"));
+            // EOF on read, exit normally
+            debug!("{len} bytes from read_buf, exiting.");
+            return Ok(())
         }
     }
 }
