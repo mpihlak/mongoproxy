@@ -1,5 +1,5 @@
 # Mongoproxy the Observable
-There are many MongoDb proxies, but this one is about observability. It passes bytes between client and the server and records query latencies, response sizes, document counts and exposes them as Prometheus metrics. It also does Jaeger tracing if the client passes a trace id in the `$comment` field of the operation.
+There are many MongoDb proxies, but this one is about observability. It passes bytes between client and the server and records query latencies, response sizes, document counts and exposes them as Prometheus metrics. It also does tracing if the client passes a trace id in the `$comment` field of the operation.
 
 All bytes are passed through unchanged. Furthermore, the metrics processing is decoupled from the proxying so that latency or bugs in the metrics processor have no impact on moving the bytes.
 
@@ -9,7 +9,7 @@ bits from the stream.
 ## Current state
 Supports MongoDb 3.6 and greater (`OP_MSG` protocol), and produces throughput and latency metrics both at the network and document level. The legacy `OP_COMMAND` protocol used by some drivers and older Mongo versions is not fully supported. The proxy won't crash or anything but the collected metrics will be limited.
 
-Jaeger tracing is supported for `OP_MSG` protocol (sorry, no legacy clients) and only for operations that support `$comment` strings.
+Tracing is supported for `OP_MSG` protocol (sorry, no legacy clients) and only for operations that support `$comment` strings. Use either `traceparent:<ID>` or `uber-trace-id:<ID>`.
 
 Performance is good. Expect to add just few millicores for the proxy process and < 10 MB of memory used. The actual numbers depend on the workload.
 
@@ -34,17 +34,17 @@ Note that this mode does not automatically support replica sets, as replicaset c
 
 `iptables -t nat -A PREROUTING -i ${IFACE} -p tcp --dport ${MONGO_PORT} -j REDIRECT --to-port ${PROXY_PORT}`
 
-### With Jaeger tracing
+### With tracing
 ```
 mongoproxy --proxy 27113:localhost:27017 \
     --service-name mongoproxy-ftw \
-    --enable-jaeger \
-    --jaeger-addr localhost:6831
+    --enable-otlp \
+    --otlp-endpoint localhost:4317
 ```
 
-Same as above but with Jaeger tracing enabled. Spans will be sent to collector on `localhost:6831`. The service name for the traces is set to `mongoproxy-ftw`.
+Same as above but with tracing enabled. Spans will be sent to OTLP gRPC collector on `localhost:4317`. The service name for the traces is set to `mongoproxy-ftw`.
 
-Running with `--enable-jaeger` adds some overhead as the full query text is parsed and tagged to the trace. 
+Running with `--enable-otlp` adds some overhead as the full query text is parsed and tagged to the trace.
 
 ### Other tips
 More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or `debug`. Add `RUST_BACKTRACE=1` for troubleshooting those (rare) crashes.
@@ -60,7 +60,7 @@ Per-request histograms:
 * `mongoproxy_client_request_bytes_total` - Request size distribution.
 * `mongoproxy_server_response_bytes_total` - Response size distribution.
 
-All per-request metrics are labeled with `client` (IP address), `app` (appName from connection metadata), `op`, `collection`, `db`, `server` and `replicaset`. 
+All per-request metrics are labeled with `client` (IP address), `app` (appName from connection metadata), `op`, `collection`, `db`, `server` and `replicaset`.
 
 Connection counters
 * `mongoproxy_client_connections_established_total`
