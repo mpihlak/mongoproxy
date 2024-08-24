@@ -208,7 +208,7 @@ impl<'a> DocumentParser<'a> {
     /// let parser = DocumentParser::builder().match_exact("/foo/name", "name");
     /// ```
     pub fn match_exact(mut self, prefix: &'a str, label: &'a str) -> Self {
-        let mut matcher = self.matcher_entry(prefix);
+        let matcher = self.matcher_entry(prefix);
         matcher.match_exact = Some(label.to_string());
         self
     }
@@ -222,7 +222,7 @@ impl<'a> DocumentParser<'a> {
     /// let parser = DocumentParser::builder().match_name_at("/foo", 1, "x");
     /// ```
     pub fn match_name_at(mut self, prefix: &'a str, pos: u32, label: &'a str) -> Self {
-        let mut matcher = self.matcher_entry(prefix);
+        let matcher = self.matcher_entry(prefix);
         matcher.match_name_at_pos = Some((label.to_string(), pos));
         self
     }
@@ -236,7 +236,7 @@ impl<'a> DocumentParser<'a> {
     /// let parser = DocumentParser::builder().match_value_at("/foo", 1, "x");
     /// ```
     pub fn match_value_at(mut self, prefix: &'a str, pos: u32, label: &'a str) -> Self {
-        let mut matcher = self.matcher_entry(prefix);
+        let matcher = self.matcher_entry(prefix);
         matcher.match_value_at_pos = Some((label.to_string(), pos));
         self
     }
@@ -250,7 +250,7 @@ impl<'a> DocumentParser<'a> {
     /// let parser = DocumentParser::builder().match_array_len("/foo/pets", "num_pets");
     /// ```
     pub fn match_array_len(mut self, prefix: &'a str, label: &'a str) -> Self {
-        let mut matcher = self.matcher_entry(prefix);
+        let matcher = self.matcher_entry(prefix);
         matcher.match_array_len = Some(label.to_string());
         self
     }
