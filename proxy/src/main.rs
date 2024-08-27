@@ -276,9 +276,6 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let (client_tx, client_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(MAX_CHANNEL_EVENTS);
     let (server_tx, server_rx): (mpsc::Sender<BufBytes>, mpsc::Receiver<BufBytes>) = mpsc::channel(MAX_CHANNEL_EVENTS);
 
-    let signal_client = client_tx.clone();
-    let signal_server = server_tx.clone();
-
     let mut task_set = JoinSet::new();
 
     task_set.spawn(async move {
@@ -297,12 +294,12 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let (mut read_server, mut write_server) = server_stream.into_split();
 
     task_set.spawn(async move {
-        proxy_bytes(&mut read_client, &mut write_server, client_tx, signal_server).await?;
+        proxy_bytes(&mut read_client, &mut write_server, client_tx).await?;
         Ok::<(), io::Error>(())
     }.instrument(info_span!("client proxy")));
 
     task_set.spawn(async move {
-        proxy_bytes(&mut read_server, &mut write_client, server_tx, signal_client).await?;
+        proxy_bytes(&mut read_server, &mut write_client, server_tx).await?;
         Ok::<(), io::Error>(())
     }.instrument(info_span!("server proxy")));
 
@@ -325,7 +322,6 @@ async fn proxy_bytes(
     read_from: &mut OwnedReadHalf,
     write_to: &mut OwnedWriteHalf,
     tracker_channel: mpsc::Sender<BufBytes>,
-    notify_channel: mpsc::Sender<BufBytes>,
 ) -> Result<(), io::Error>
 {
     let mut tracker_ok = true;
@@ -342,15 +338,10 @@ async fn proxy_bytes(
                     error!("error sending to tracker, stop: {}", e);
                     TRACKER_CHANNEL_ERRORS_TOTAL.inc();
                     tracker_ok = false;
-
-                    // Let the other side know that we're closed.
-                    let notification = io::Error::new(io::ErrorKind::UnexpectedEof, "notify channel close");
-                    let _ = notify_channel.send(Err(notification)).await;
                 }
             }
         } else {
             // EOF on read, exit normally
-            debug!("{len} bytes from read_buf, exiting.");
             return Ok(())
         }
     }
