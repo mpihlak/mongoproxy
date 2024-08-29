@@ -1,7 +1,7 @@
 use std::{fmt, io::Cursor};
 use tokio::io::AsyncReadExt;
 use tracing::{error, warn, info, debug};
-use byteorder::{LittleEndian, WriteBytesExt};
+use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use async_bson::{DocumentParser, DocumentReader, Document, read_cstring};
 use lazy_static::lazy_static;
 
@@ -304,10 +304,10 @@ impl MsgHeader {
     }
 
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let message_length  = rdr.read_u32_le().await? as usize;
-        let request_id      = rdr.read_u32_le().await?;
-        let response_to     = rdr.read_u32_le().await?;
-        let op_code         = rdr.read_u32_le().await?;
+        let message_length  = rdr.read_u32_le()? as usize;
+        let request_id      = rdr.read_u32_le()?;
+        let response_to     = rdr.read_u32_le()?;
+        let op_code         = rdr.read_u32_le()?;
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
     }
 
@@ -366,9 +366,7 @@ impl MsgOpMsg {
         message_length: u64,
     ) -> Result<Self>
     {
-        use tokio::io::AsyncReadExt;
-
-        let flag_bits = rdr.read_u32_le().await?;
+        let flag_bits = rdr.read_u32_le()?;
         debug!("flag_bits={:04x}", flag_bits);
 
         let body_length = if flag_bits & 1 == 1 {
@@ -378,13 +376,14 @@ impl MsgOpMsg {
         };
 
         let msg = {
-            let mut rdr = rdr.take(body_length);
+            let mut buf = vec![0u8; body_length as usize];
+            rdr.read_exact(&mut buf[..])?;
 
-            MsgOpMsg::read_body(&mut rdr, flag_bits, log_mongo_messages, collect_tracing_data).await?
+            MsgOpMsg::read_body(&mut &buf[..], flag_bits, log_mongo_messages, collect_tracing_data).await?
         };
 
         if flag_bits & 1 == 1 {
-            let _checksum = rdr.read_u32_le().await?;
+            let _checksum = rdr.read_u32_le()?;
         }
 
         Ok(msg)
@@ -416,7 +415,7 @@ impl MsgOpMsg {
         let mut rdr = &mut rdr;
 
         loop {
-            let kind = match rdr.read_u8().await {
+            let kind = match rdr.read_u8() {
                 Ok(r)   => r,
                 Err(e) if e.kind() == tokio::io::ErrorKind::UnexpectedEof => {
                     // This is OK if we've already read at least one doc. In fact
@@ -444,8 +443,8 @@ impl MsgOpMsg {
                     &mut section_bytes,
                     ).await?;
             } else if kind == 1 {
-                let section_size = rdr.read_u32_le().await? as usize;
-                let seq_id = read_cstring(&mut rdr).await?;
+                let section_size = rdr.read_u32_le()? as usize;
+                let seq_id = read_cstring(&mut rdr)?;
                 debug!("kind=1: section_size={}, seq_id={}", section_size, seq_id);
 
                 // Section size includes the size of the seq_id cstring and the length bytes, but
@@ -455,18 +454,19 @@ impl MsgOpMsg {
 
                 // Consume all the documents in the section, but no more.
                 {
-                    use tokio::io::AsyncReadExt;
+                    let mut buf = vec![0u8; section_size];
+                    rdr.read_exact(&mut buf[..])?;
 
-                    let mut section_rdr = rdr.take(section_size as u64);
+                    let mut cur = Cursor::new(buf);
+
                     while MsgOpMsg::process_section_document(
-                        &mut section_rdr,
+                        &mut cur,
                         log_mongo_messages,
                         collect_tracing_data,
                         &mut documents,
                         &mut section_bytes
                     ).await?  {}
-                }
-            } else {
+                }            } else {
                 warn!("unrecognized kind={}", kind);
                 break;
             }
@@ -485,7 +485,7 @@ impl MsgOpMsg {
     {
         let doc = MONGO_DOC_PARSER.parse_document_keep_bytes(
                 &mut rdr,
-                log_mongo_messages | collect_tracing_data).await;
+                log_mongo_messages | collect_tracing_data);
         match doc {
             Ok(doc) => {
                 debug!("doc: {}", doc);
@@ -559,11 +559,11 @@ impl fmt::Display for MsgOpQuery {
 impl MsgOpQuery {
 
     pub async fn from_reader(mut rdr: impl DocumentReader, log_mongo_messages: bool) -> Result<Self> {
-        let flags  = rdr.read_u32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
-        let number_to_skip = rdr.read_i32_le().await?;
-        let number_to_return = rdr.read_i32_le().await?;
-        let query = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages).await?;
+        let flags  = rdr.read_u32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
+        let number_to_skip = rdr.read_i32_le()?;
+        let number_to_return = rdr.read_i32_le()?;
+        let query = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages)?;
 
         if log_mongo_messages {
             if let Some(bytes) = query.get_raw_bytes() {
@@ -596,10 +596,10 @@ impl fmt::Display for MsgOpGetMore {
 impl MsgOpGetMore {
 
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let _zero = rdr.read_i32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
-        let number_to_return = rdr.read_i32_le().await?;
-        let cursor_id = rdr.read_i64_le().await?;
+        let _zero = rdr.read_i32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
+        let number_to_return = rdr.read_i32_le()?;
+        let cursor_id = rdr.read_i64_le()?;
 
         Ok(MsgOpGetMore{full_collection_name, number_to_return, cursor_id})
     }
@@ -623,11 +623,11 @@ impl fmt::Display for MsgOpUpdate {
 impl MsgOpUpdate {
 
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let _zero = rdr.read_u32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
-        let flags = rdr.read_u32_le().await?;
-        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
-        let update = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+        let _zero = rdr.read_u32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
+        let flags = rdr.read_u32_le()?;
+        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr)?;
+        let update = MONGO_DOC_PARSER.parse_document(&mut rdr)?;
 
         Ok(MsgOpUpdate{flags, full_collection_name, selector, update})
     }
@@ -650,10 +650,10 @@ impl fmt::Display for MsgOpDelete {
 impl MsgOpDelete {
 
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let _zero = rdr.read_u32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
-        let flags = rdr.read_u32_le().await?;
-        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+        let _zero = rdr.read_u32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
+        let flags = rdr.read_u32_le()?;
+        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr)?;
 
         Ok(MsgOpDelete{flags, full_collection_name, selector})
     }
@@ -674,8 +674,8 @@ impl fmt::Display for MsgOpInsert {
 
 impl MsgOpInsert {
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let flags = rdr.read_u32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
+        let flags = rdr.read_u32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
 
         // There's also a list of documents in the message, but we ignore it.
 
@@ -712,13 +712,13 @@ impl ResponseDocuments for MsgOpReply {
 impl MsgOpReply {
 
     pub async fn from_reader(mut rdr: impl DocumentReader, log_mongo_messages: bool) -> Result<Self> {
-        let flags  = rdr.read_u32_le().await?;
-        let cursor_id = rdr.read_u64_le().await?;
-        let starting_from = rdr.read_u32_le().await?;
-        let number_returned = rdr.read_u32_le().await?;
+        let flags  = rdr.read_u32_le()?;
+        let cursor_id = rdr.read_u64_le()?;
+        let starting_from = rdr.read_u32_le()?;
+        let number_returned = rdr.read_u32_le()?;
         let mut documents = Vec::new();
 
-        while let Ok(doc) = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages).await {
+        while let Ok(doc) = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages) {
             documents.push(doc);
         }
 
@@ -755,12 +755,12 @@ impl fmt::Display for MsgOpCompressed {
 impl MsgOpCompressed {
 
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let original_op = rdr.read_i32_le().await?;
-        let uncompressed_size = rdr.read_i32_le().await?;
-        let compressor_id = rdr.read_u8().await?;
+        let original_op = rdr.read_i32_le()?;
+        let uncompressed_size = rdr.read_i32_le()?;
+        let compressor_id = rdr.read_u8()?;
 
         // Ignore the actual compressed message, we are not going to use it
-        let _len = tokio::io::copy(&mut rdr, &mut tokio::io::sink()).await?;
+        let _len = std::io::copy(&mut rdr, &mut std::io::sink())?;
 
         Ok(MsgOpCompressed{original_op, uncompressed_size, compressor_id})
     }
