@@ -93,10 +93,11 @@ lazy_static! {
             "Number of non-ok server responses",
             OP_LABELS).unwrap();
 
-    static ref SERVER_RESPONSE_REQUEST_MISMATCH: Counter =
-        register_counter!(
+    static ref SERVER_RESPONSE_REQUEST_MISMATCH: CounterVec =
+        register_counter_vec!(
             "mongoproxy_server_response_request_mismatch_total",
-            "Number of times mongoproxy was unable to match server response to a client request"
+            "Number of times mongoproxy was unable to match server response to a client request",
+            &["response_to"]
         ).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
@@ -370,6 +371,7 @@ pub struct MongoStatsTracker {
     client_application:     String,
     client_username:        String,
     client_request_hdr:     Option<(ClientRequest, MsgHeader)>,
+    server_request_hdr:     Option<MsgHeader>,
     replicaset:             String,
     server_host:            String,
     app:                    AppConfig,
@@ -399,6 +401,7 @@ impl MongoStatsTracker{
             server_addr: server_addr.to_string(),
             server_addr_sa,
             client_request_hdr: None,
+            server_request_hdr: None,
             client_application: String::from(""),
             client_username: String::from(""),
             replicaset: String::from(""),
@@ -524,17 +527,25 @@ impl MongoStatsTracker{
 
         if let Some((mut client_request, req_hdr)) = self.client_request_hdr.take() {
             if hdr.response_to != req_hdr.request_id {
-                // And if this starts to happen, then we need to go back to the HashMap of requests ...
                 warn!("Server response to {} does not match client request {}",
                     hdr.response_to, req_hdr.request_id);
-                SERVER_RESPONSE_REQUEST_MISMATCH.inc();
+                SERVER_RESPONSE_REQUEST_MISMATCH.with_label_values(&["client"]).inc();
             } else {
                 self.observe_server_response_to(hdr, msg, &mut client_request);
             }
+        } else if let Some(req_hdr) = self.server_request_hdr.take() {
+            // Some server responses are linked to previous server responses. For example there
+            // can be multiple "helloOk" responses to a single "hello" message.
+            // TODO: Handle these for realz.
+            if hdr.response_to != req_hdr.request_id {
+                warn!("Server response {} does not match the prior server message {}", hdr.response_to, req_hdr.request_id);
+                SERVER_RESPONSE_REQUEST_MISMATCH.with_label_values(&["server"]).inc();
+            }
         } else {
             warn!("No client request found for {:?}", hdr);
-            SERVER_RESPONSE_REQUEST_MISMATCH.inc();
         }
+
+        self.server_request_hdr = Some(hdr.clone());
     }
 
     fn observe_server_response_to(
