@@ -24,7 +24,7 @@ if __name__ == "__main__":
 
     tracer = config.initialize_tracer()
 
-    con = pymongo.MongoClient("mongodb://localhost:27113/?appName=tracing_client")
+    con = pymongo.MongoClient("mongodb://localhost:27111/?appName=tracing_client")
     coll = con['test']['kittens']
 
     def span_as_text(span):
@@ -46,7 +46,7 @@ if __name__ == "__main__":
             for i in range(110):
                 # Insert does not actually take a $comment so we just skip
                 # it's not that interesting op anyway.
-                coll.insert({"name": "Purry", "number": i })
+                coll.insert_one({"name": "Purry", "number": i })
 
         print("Fetching exactly 101")
         with tracer.start_span('Fetching 101', root_span) as span:

@@ -1,22 +1,14 @@
-use std::fmt;
+use std::{fmt, io::Cursor};
+use tokio::io::AsyncReadExt;
 use tracing::{error, warn, info, debug};
-use byteorder::{LittleEndian, WriteBytesExt};
+use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use async_bson::{DocumentParser, DocumentReader, Document, read_cstring};
 use lazy_static::lazy_static;
-
-#[cfg(feature="is_sync")]
-use {
-    std::io::{self, Cursor},
-    byteorder::ReadBytesExt,
-};
-
-#[cfg(not(feature="is_sync"))]
-use tokio::io::{self, AsyncReadExt};
 
 use std::io::{Result, Write, Error, ErrorKind};
 
 #[macro_use] extern crate prometheus;
-use prometheus::CounterVec;
+use prometheus::{CounterVec, GaugeVec};
 
 pub const HEADER_LENGTH: usize = 16;
 
@@ -70,7 +62,21 @@ lazy_static! {
         register_counter_vec!(
             "mongoproxy_message_parse_error_count_total",
             "Message body parse errors",
-            &["error"]).unwrap();
+            &["source", "error"]).unwrap();
+
+    static ref READ_BUFFER_SIZE: GaugeVec =
+        register_gauge_vec!(
+            "mongoproxy_read_buffer_size",
+            "Current size of the read buffer for client or server reads",
+            &["source"]
+            ).unwrap();
+
+    static ref READ_BUFFER_CAPACITY: GaugeVec =
+        register_gauge_vec!(
+            "mongoproxy_read_buffer_capacity",
+            "Current capacity of the read buffer for client or server reads",
+            &["source"]
+            ).unwrap();
 
 }
 
@@ -117,54 +123,131 @@ impl fmt::Display for MongoMessage {
     }
 }
 
-impl MongoMessage {
+#[derive(Debug)]
+pub enum ProxyError {
+    IoError(std::io::Error),
+    InvalidHeader,
+    PartialData,
+    ParserFailed,
+    EOF,
+}
 
-    #[maybe_async::maybe_async]
-    pub async fn from_reader(
-        mut rdr: impl DocumentReader,
-        log_mongo_messages: bool,
-        collect_tracing_data: bool,
-    ) -> Result<(MsgHeader, MongoMessage)> {
-        let hdr = MsgHeader::from_reader(&mut rdr).await?;
+impl fmt::Display for ProxyError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ParseError: {:?}", self)
+    }
+}
 
-        if hdr.message_length < HEADER_LENGTH {
-            return Err(Error::new(ErrorKind::Other, "Invalid MongoDb header"));
+impl std::error::Error for ProxyError {}
+
+pub struct MongoMessageProxy {
+    log_mongo_messages: bool,
+    collect_tracing_data: bool,
+    buf: bytes::BytesMut,
+}
+
+impl MongoMessageProxy {
+
+    pub fn new(read_buffer_size: usize, log_mongo_messages: bool, collect_tracing_data: bool) -> Self {
+        Self {
+            log_mongo_messages,
+            collect_tracing_data,
+            buf: bytes::BytesMut::with_capacity(read_buffer_size),
+        }
+    }
+
+    // Read a MongoDb message from one stream and write it to another. Return the parsed message header
+    // and body.
+    pub async fn proxy_mongo_message<R, W>(
+        &mut self,
+        read_source: &str,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> std::result::Result<(MsgHeader, MongoMessage), ProxyError>
+        where
+            R: tokio::io::AsyncRead+tokio::io::AsyncReadExt+Unpin,
+            W: tokio::io::AsyncWrite+tokio::io::AsyncWriteExt+Unpin,
+    {
+        self.buf.clear();
+        while self.buf.len() < HEADER_LENGTH {
+            let remaining_bytes = (HEADER_LENGTH - self.buf.len()) as u64;
+            let len = reader.take(remaining_bytes).read_buf(&mut self.buf)
+                .await
+                .map_err(ProxyError::IoError)?;
+            debug!("Read {len} of the required header bytes.");
+
+            if len == 0 {
+                debug!("Out of data when reading header, have {len} bytes");
+                return Err(ProxyError::EOF)
+            }
         }
 
+        let hdr = MsgHeader::from_reader(&self.buf[..])
+            .await
+            .map_err(ProxyError::IoError)?;
         debug!("have header: {}", hdr);
 
-        // Take only as much as promised in the header.
-        let message_length = (hdr.message_length - HEADER_LENGTH) as u64;
-        let mut rdr = rdr.take(message_length);
+        if hdr.message_length < HEADER_LENGTH {
+            // TODO: Increase a counter for invalid header
+            warn!("Invalid message length in header: {}", hdr.message_length);
+            return Err(ProxyError::InvalidHeader);
+        }
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
-        let msg = match MongoMessage::extract_message(
-                hdr.op_code,
-                &mut rdr,
-                log_mongo_messages,
-                collect_tracing_data,
-                message_length).await {
-            Ok(msg) => msg,
-            Err(e) => {
-                error!("Failed to parse MongoDb {} message: {}", hdr.op_code, e);
-                MESSAGE_PARSE_ERRORS_COUNTER.with_label_values(&[&e.to_string()]).inc();
-                return Err(e);
-            }
-        };
+        writer.write_all(&self.buf)
+            .await
+            .map_err(ProxyError::IoError)?;
 
-        let len = io::copy(&mut rdr, &mut io::sink()).await?;
-        if len > 0 {
-            warn!("partial message, sinking {} bytes.", len);
+        // Collect the message length worth of bytes. Don't take any more than
+        // is needed so that we can safely clear the buffer here without losing
+        // any unprocessed bytes.
+        let message_length = hdr.message_length - HEADER_LENGTH;
+        self.buf.clear();
+        while self.buf.len() < message_length {
+            let remaining_bytes = (message_length - self.buf.len()) as u64;
+            let len = reader.take(remaining_bytes).read_buf(&mut self.buf)
+                .await
+                .map_err(ProxyError::IoError)?;
+            debug!("Read {len} of the required {message_length} bytes.");
+
+            if len == 0 {
+                warn!("Out of data when reading message. Have {len} of {message_length}");
+                return Err(ProxyError::PartialData)
+            }
         }
 
-        Ok((hdr, msg))
+        writer.write_all(&self.buf)
+            .await
+            .map_err(ProxyError::IoError)?;
+
+        READ_BUFFER_SIZE.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
+        READ_BUFFER_CAPACITY.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
+
+        match MongoMessage::extract_message(
+            hdr.op_code,
+            &mut &self.buf[..],
+            self.log_mongo_messages,
+            self.collect_tracing_data,
+            message_length as u64).await
+        {
+            Ok(msg) => {
+                Ok((hdr, msg))
+            },
+            Err(e) => {
+                error!("Failed to parse MongoDb {} message: {}", hdr.op_code, e);
+                MESSAGE_PARSE_ERRORS_COUNTER.with_label_values(&[read_source, &e.to_string()]).inc();
+                Err(ProxyError::ParserFailed)
+            }
+        }
     }
+}
+
+impl MongoMessage {
 
     // Extract a message or return an error
     //
     // Note that this assumes that it is safe to read everything from the reader.
-    #[maybe_async::maybe_async]
     pub async fn extract_message(
         op: u32,
         mut rdr: impl DocumentReader,
@@ -220,12 +303,11 @@ impl MsgHeader {
         }
     }
 
-    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let message_length  = rdr.read_u32_le().await? as usize;
-        let request_id      = rdr.read_u32_le().await?;
-        let response_to     = rdr.read_u32_le().await?;
-        let op_code         = rdr.read_u32_le().await?;
+        let message_length  = rdr.read_u32_le()? as usize;
+        let request_id      = rdr.read_u32_le()?;
+        let response_to     = rdr.read_u32_le()?;
+        let op_code         = rdr.read_u32_le()?;
         Ok(MsgHeader{message_length, request_id, response_to, op_code})
     }
 
@@ -277,7 +359,6 @@ impl MsgOpMsg {
 
     // Construct a new OP_MSG message from a reader. This requires the length of the whole
     // message to be passed in to simplify handling of the optional checksum.
-    #[maybe_async::maybe_async]
     pub async fn from_reader<T: DocumentReader>(
         rdr: &mut T,
         log_mongo_messages: bool,
@@ -285,7 +366,7 @@ impl MsgOpMsg {
         message_length: u64,
     ) -> Result<Self>
     {
-        let flag_bits = rdr.read_u32_le().await?;
+        let flag_bits = rdr.read_u32_le()?;
         debug!("flag_bits={:04x}", flag_bits);
 
         let body_length = if flag_bits & 1 == 1 {
@@ -294,22 +375,15 @@ impl MsgOpMsg {
             message_length - 4          // Subtract just the flags
         };
 
-        #[cfg(not(feature="is_sync"))]
-        let msg = {
-            let mut rdr = rdr.take(body_length);
-
-            MsgOpMsg::read_body(&mut rdr, flag_bits, log_mongo_messages, collect_tracing_data).await?
-        };
-        #[cfg(feature="is_sync")]
         let msg = {
             let mut buf = vec![0u8; body_length as usize];
-            rdr.read_exact(&mut buf[..]).await?;
+            rdr.read_exact(&mut buf[..])?;
 
             MsgOpMsg::read_body(&mut &buf[..], flag_bits, log_mongo_messages, collect_tracing_data).await?
         };
 
         if flag_bits & 1 == 1 {
-            let _checksum = rdr.read_u32_le().await?;
+            let _checksum = rdr.read_u32_le()?;
         }
 
         Ok(msg)
@@ -329,7 +403,6 @@ impl MsgOpMsg {
     // take from the `rdr` and later try to use it. I'm sure there's an idiomatic way around
     // this but I just haven't found it.
     //
-    #[maybe_async::maybe_async]
     async fn read_body(
         mut rdr: impl DocumentReader,
         flag_bits: u32,
@@ -342,9 +415,9 @@ impl MsgOpMsg {
         let mut rdr = &mut rdr;
 
         loop {
-            let kind = match rdr.read_u8().await {
+            let kind = match rdr.read_u8() {
                 Ok(r)   => r,
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                Err(e) if e.kind() == tokio::io::ErrorKind::UnexpectedEof => {
                     // This is OK if we've already read at least one doc. In fact
                     // we're relying on reaching an EOF here to determine when to
                     // stop parsing.
@@ -370,8 +443,8 @@ impl MsgOpMsg {
                     &mut section_bytes,
                     ).await?;
             } else if kind == 1 {
-                let section_size = rdr.read_u32_le().await? as usize;
-                let seq_id = read_cstring(&mut rdr).await?;
+                let section_size = rdr.read_u32_le()? as usize;
+                let seq_id = read_cstring(&mut rdr)?;
                 debug!("kind=1: section_size={}, seq_id={}", section_size, seq_id);
 
                 // Section size includes the size of the seq_id cstring and the length bytes, but
@@ -380,22 +453,9 @@ impl MsgOpMsg {
                 let section_size = section_size - seq_id.len() - 1 - 4;
 
                 // Consume all the documents in the section, but no more.
-                #[cfg(not(feature="is_sync"))]
-                {
-                    let mut section_rdr = rdr.take(section_size as u64);
-                    while MsgOpMsg::process_section_document(
-                        &mut section_rdr,
-                        log_mongo_messages,
-                        collect_tracing_data,
-                        &mut documents,
-                        &mut section_bytes
-                    ).await?  {}
-                }
-
-                #[cfg(feature="is_sync")]
                 {
                     let mut buf = vec![0u8; section_size];
-                    rdr.read_exact(&mut buf[..]).await?;
+                    rdr.read_exact(&mut buf[..])?;
 
                     let mut cur = Cursor::new(buf);
 
@@ -406,8 +466,7 @@ impl MsgOpMsg {
                         &mut documents,
                         &mut section_bytes
                     ).await?  {}
-                }
-            } else {
+                }            } else {
                 warn!("unrecognized kind={}", kind);
                 break;
             }
@@ -416,7 +475,6 @@ impl MsgOpMsg {
         Ok(MsgOpMsg{flag_bits, documents, section_bytes})
     }
 
-    #[maybe_async::maybe_async]
     async fn process_section_document(
         mut rdr: impl DocumentReader,
         log_mongo_messages: bool,
@@ -427,7 +485,7 @@ impl MsgOpMsg {
     {
         let doc = MONGO_DOC_PARSER.parse_document_keep_bytes(
                 &mut rdr,
-                log_mongo_messages | collect_tracing_data).await;
+                log_mongo_messages | collect_tracing_data);
         match doc {
             Ok(doc) => {
                 debug!("doc: {}", doc);
@@ -451,7 +509,7 @@ impl MsgOpMsg {
                 documents.push(doc);
                 Ok(true)
             },
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+            Err(e) if e.kind() == tokio::io::ErrorKind::UnexpectedEof => {
                 Ok(false)
             },
             Err(e)  => {
@@ -500,13 +558,12 @@ impl fmt::Display for MsgOpQuery {
 
 impl MsgOpQuery {
 
-    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader, log_mongo_messages: bool) -> Result<Self> {
-        let flags  = rdr.read_u32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
-        let number_to_skip = rdr.read_i32_le().await?;
-        let number_to_return = rdr.read_i32_le().await?;
-        let query = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages).await?;
+        let flags  = rdr.read_u32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
+        let number_to_skip = rdr.read_i32_le()?;
+        let number_to_return = rdr.read_i32_le()?;
+        let query = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages)?;
 
         if log_mongo_messages {
             if let Some(bytes) = query.get_raw_bytes() {
@@ -538,12 +595,11 @@ impl fmt::Display for MsgOpGetMore {
 
 impl MsgOpGetMore {
 
-    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let _zero = rdr.read_i32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
-        let number_to_return = rdr.read_i32_le().await?;
-        let cursor_id = rdr.read_i64_le().await?;
+        let _zero = rdr.read_i32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
+        let number_to_return = rdr.read_i32_le()?;
+        let cursor_id = rdr.read_i64_le()?;
 
         Ok(MsgOpGetMore{full_collection_name, number_to_return, cursor_id})
     }
@@ -566,13 +622,12 @@ impl fmt::Display for MsgOpUpdate {
 
 impl MsgOpUpdate {
 
-    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let _zero = rdr.read_u32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
-        let flags = rdr.read_u32_le().await?;
-        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
-        let update = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+        let _zero = rdr.read_u32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
+        let flags = rdr.read_u32_le()?;
+        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr)?;
+        let update = MONGO_DOC_PARSER.parse_document(&mut rdr)?;
 
         Ok(MsgOpUpdate{flags, full_collection_name, selector, update})
     }
@@ -594,12 +649,11 @@ impl fmt::Display for MsgOpDelete {
 
 impl MsgOpDelete {
 
-    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let _zero = rdr.read_u32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
-        let flags = rdr.read_u32_le().await?;
-        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr).await?;
+        let _zero = rdr.read_u32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
+        let flags = rdr.read_u32_le()?;
+        let selector = MONGO_DOC_PARSER.parse_document(&mut rdr)?;
 
         Ok(MsgOpDelete{flags, full_collection_name, selector})
     }
@@ -619,10 +673,9 @@ impl fmt::Display for MsgOpInsert {
 }
 
 impl MsgOpInsert {
-    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let flags = rdr.read_u32_le().await?;
-        let full_collection_name = read_cstring(&mut rdr).await?;
+        let flags = rdr.read_u32_le()?;
+        let full_collection_name = read_cstring(&mut rdr)?;
 
         // There's also a list of documents in the message, but we ignore it.
 
@@ -658,15 +711,14 @@ impl ResponseDocuments for MsgOpReply {
 
 impl MsgOpReply {
 
-    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader, log_mongo_messages: bool) -> Result<Self> {
-        let flags  = rdr.read_u32_le().await?;
-        let cursor_id = rdr.read_u64_le().await?;
-        let starting_from = rdr.read_u32_le().await?;
-        let number_returned = rdr.read_u32_le().await?;
+        let flags  = rdr.read_u32_le()?;
+        let cursor_id = rdr.read_u64_le()?;
+        let starting_from = rdr.read_u32_le()?;
+        let number_returned = rdr.read_u32_le()?;
         let mut documents = Vec::new();
 
-        while let Ok(doc) = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages).await {
+        while let Ok(doc) = MONGO_DOC_PARSER.parse_document_keep_bytes(&mut rdr, log_mongo_messages) {
             documents.push(doc);
         }
 
@@ -702,14 +754,13 @@ impl fmt::Display for MsgOpCompressed {
 
 impl MsgOpCompressed {
 
-    #[maybe_async::maybe_async]
     pub async fn from_reader(mut rdr: impl DocumentReader) -> Result<Self> {
-        let original_op = rdr.read_i32_le().await?;
-        let uncompressed_size = rdr.read_i32_le().await?;
-        let compressor_id = rdr.read_u8().await?;
+        let original_op = rdr.read_i32_le()?;
+        let uncompressed_size = rdr.read_i32_le()?;
+        let compressor_id = rdr.read_u8()?;
 
         // Ignore the actual compressed message, we are not going to use it
-        let _len = io::copy(&mut rdr, &mut io::sink()).await?;
+        let _len = std::io::copy(&mut rdr, &mut std::io::sink())?;
 
         Ok(MsgOpCompressed{original_op, uncompressed_size, compressor_id})
     }
@@ -746,10 +797,10 @@ pub fn debug_fmt(buf: &[u8]) -> String {
 
 mod tests {
     use super::*;
-    use byteorder::{LittleEndian, WriteBytesExt};
     use bson::doc;
+    use tracing_test::traced_test;
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_header() {
         let hdr = MsgHeader {
             message_length: 100,
@@ -805,7 +856,7 @@ mod tests {
         doc.to_writer(&mut buf).unwrap();
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_op_msg() {
         let mut buf = Vec::new();
         msgop_to_buf(0, &mut buf);
@@ -822,7 +873,7 @@ mod tests {
         assert_eq!("b0", msg.documents[4].get_str("op").unwrap());
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_op_msg_raw() {
         // This is an OP_MSG that contains a "delete" operation with payloads of type 0 and 1
         // (total of 2 BSON documents).
@@ -854,7 +905,7 @@ mod tests {
         assert_eq!(0x69, msg.section_bytes[1].len());
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_checksummed_message() {
         let buf = vec![
             0x01, 0x00, 0x00, 0x00, 0x00, 0x65, 0x00, 0x00, 0x00, 0x10, 0x6c, 0x69, 0x73, 0x74, 0x44, 0x61,
@@ -878,7 +929,7 @@ mod tests {
         }
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_op_query() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(0i32).unwrap();   // flag bits
@@ -897,7 +948,7 @@ mod tests {
         assert_eq!("ok", msg.query.get_str("comment").unwrap());
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_op_getmore() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(0).unwrap();      // zero
@@ -911,7 +962,7 @@ mod tests {
         assert_eq!(123456, msg.cursor_id);
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_op_update() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(0).unwrap();      // zero
@@ -929,7 +980,7 @@ mod tests {
         assert_eq!("b", msg.update.get_str("op").unwrap());
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_op_delete() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(0).unwrap();      // zero
@@ -944,7 +995,7 @@ mod tests {
         assert_eq!("a", msg.selector.get_str("op").unwrap());
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_op_insert() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(123).unwrap();    // flags
@@ -955,7 +1006,7 @@ mod tests {
         assert_eq!("tribbles", msg.full_collection_name);
     }
 
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
+    #[tokio::test]
     async fn test_parse_op_reply() {
         let mut buf = Vec::new();
         buf.write_i32::<LittleEndian>(123).unwrap();    // flags
@@ -977,8 +1028,9 @@ mod tests {
     }
 
     // Test parsing multiple back to back messages
-    #[maybe_async::test(feature="is_sync", async(not(feature="is_sync"), tokio::test))]
-    async fn test_parse_multiple_message() {
+    #[traced_test]
+    #[tokio::test]
+    async fn test_parse_multiple_messages() {
         let mut buf = Vec::new();
 
         for i in 0..3u32 {
@@ -996,12 +1048,22 @@ mod tests {
             buf.extend(&msg_buf);
         }
 
+        let buflen = buf.len();
+        let input = buf.clone();
         let mut cur = std::io::Cursor::new(buf);
+        let mut out = Vec::new();
         let mut messages = Vec::new();
-        while let Ok((_, msg)) = MongoMessage::from_reader(&mut cur, false, false).await {
+        let mut message_proxy = MongoMessageProxy::new(1024, false, true);
+
+        while let Ok((_, msg)) = message_proxy.proxy_mongo_message("client", &mut cur, &mut out).await {
             messages.push(msg);
         }
 
+        // Expect all bytes to have been proxied
+        assert_eq!(buflen, out.len());
+        assert_eq!(input, out);
+
+        // Expect all messages have been parsed
         assert_eq!(3, messages.len());
         for (i, msg) in messages.iter().enumerate() {
             match msg {

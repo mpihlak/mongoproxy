@@ -1,4 +1,5 @@
 use mongo_protocol::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
+use tokio::sync::mpsc::Receiver;
 use crate::jaeger_tracing;
 use crate::appconfig::AppConfig;
 
@@ -6,7 +7,7 @@ use std::time::Instant;
 use std::collections::{HashMap, HashSet};
 
 use tracing::{debug, warn, info_span};
-use prometheus::{Counter, CounterVec, HistogramVec, Gauge};
+use prometheus::{CounterVec, HistogramVec, Gauge};
 
 use opentelemetry::trace::{Tracer, SpanKind, TraceContextExt};
 use opentelemetry::trace::Span as _Span;
@@ -92,10 +93,11 @@ lazy_static! {
             "Number of non-ok server responses",
             OP_LABELS).unwrap();
 
-    static ref SERVER_RESPONSE_REQUEST_MISMATCH: Counter =
-        register_counter!(
+    static ref SERVER_RESPONSE_REQUEST_MISMATCH: CounterVec =
+        register_counter_vec!(
             "mongoproxy_server_response_request_mismatch_total",
-            "Number of times mongoproxy was unable to match server response to a client request"
+            "Number of times mongoproxy was unable to match server response to a client request",
+            &["response_to"]
         ).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
@@ -130,6 +132,7 @@ lazy_static! {
 // a risk of collision if there are multiple databases on the same server.
 pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), opentelemetry::Context>;
 
+pub type TrackerMessage = (bool, MsgHeader, MongoMessage);
 
 // Stripped down version of the client request. We need this mostly for timing
 // stats and metric labels.
@@ -220,20 +223,20 @@ impl ClientRequest {
                 // is *not* actually in the full_collection_name, but needs to be obtained from the payload
                 // query. There too are multiple options (op_value or collection)
                 let pos = m.full_collection_name.find('.').unwrap_or(m.full_collection_name.len());
-                db = m.full_collection_name[..pos].to_owned();
+                m.full_collection_name[..pos].clone_into(&mut db);
 
                 if let Some(val) = m.query.get_str("collection") {
-                    coll = val.to_owned();
+                    val.clone_into(&mut coll);
                 } else if let Some(val) = m.query.get_str("op_value") {
-                    coll = val.to_owned();
+                    val.clone_into(&mut coll);
                 }
             },
             MongoMessage::GetMore(m) => {
                 op = String::from("getMore");
                 if let Some(pos) = m.full_collection_name.find('.') {
                     let (_db, _coll) = m.full_collection_name.split_at(pos);
-                    db = _db.to_owned();
-                    coll = _coll[1..].to_owned();
+                    _db.clone_into(&mut db);
+                    _coll[1..].clone_into(&mut coll);
                 }
             },
             // There is no response to OP_INSERT, DELETE, UPDATE so don't bother
@@ -368,9 +371,11 @@ pub struct MongoStatsTracker {
     client_application:     String,
     client_username:        String,
     client_request_hdr:     Option<(ClientRequest, MsgHeader)>,
+    server_request_hdr:     Option<MsgHeader>,
     replicaset:             String,
     server_host:            String,
     app:                    AppConfig,
+    tracker_rx:             Receiver<TrackerMessage>,
 }
 
 impl Drop for MongoStatsTracker {
@@ -384,20 +389,35 @@ impl Drop for MongoStatsTracker {
 }
 
 impl MongoStatsTracker{
-    pub fn new(client_addr: &str,
-               server_addr: &str,
-               server_addr_sa: std::net::SocketAddr,
-               app: AppConfig) -> Self {
+    pub fn new(
+        client_addr: &str,
+        server_addr: &str,
+        server_addr_sa: std::net::SocketAddr,
+        app: AppConfig,
+        tracker_rx: Receiver<TrackerMessage>,
+    ) -> Self {
         MongoStatsTracker {
             client_addr: client_addr.to_string(),
             server_addr: server_addr.to_string(),
             server_addr_sa,
             client_request_hdr: None,
+            server_request_hdr: None,
             client_application: String::from(""),
             client_username: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
             app,
+            tracker_rx,
+        }
+    }
+
+    pub async fn run_message_loop(&mut self) {
+        while let Some((from_client, hdr, msg)) = self.tracker_rx.recv().await {
+            if from_client {
+                self.track_client_request(&hdr, &msg);
+            } else {
+                self.track_server_response(&hdr, &msg);
+            }
         }
     }
 
@@ -440,7 +460,7 @@ impl MongoStatsTracker{
             if op == "isMaster" || op == "ismaster" || op == "hello" {
                 if self.client_application.is_empty() {
                     if let Some(app_name) = doc.get_str("app_name") {
-                        self.client_application = app_name.to_owned();
+                        app_name.clone_into(&mut self.client_application);
                         APP_CONNECTION_COUNT_TOTAL
                             .with_label_values(&[&self.client_application])
                             .inc();
@@ -448,7 +468,7 @@ impl MongoStatsTracker{
                 }
                 if self.client_username.is_empty() {
                     if let Some(username) = doc.get_str("username") {
-                        self.client_username = username.to_owned();
+                        username.clone_into(&mut self.client_username);
                         USER_CONNECTION_COUNT_TOTAL
                             .with_label_values(&[&self.client_username])
                             .inc();
@@ -494,7 +514,7 @@ impl MongoStatsTracker{
         ]
     }
 
-    pub fn track_server_response(&mut self, hdr: MsgHeader, msg: MongoMessage) {
+    pub fn track_server_response(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
         CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
         let span = info_span!("track_server_response");
@@ -507,17 +527,25 @@ impl MongoStatsTracker{
 
         if let Some((mut client_request, req_hdr)) = self.client_request_hdr.take() {
             if hdr.response_to != req_hdr.request_id {
-                // And if this starts to happen, then we need to go back to the HashMap of requests ...
                 warn!("Server response to {} does not match client request {}",
                     hdr.response_to, req_hdr.request_id);
-                SERVER_RESPONSE_REQUEST_MISMATCH.inc();
+                SERVER_RESPONSE_REQUEST_MISMATCH.with_label_values(&["client"]).inc();
             } else {
-                self.observe_server_response_to(&hdr, &msg, &mut client_request);
+                self.observe_server_response_to(hdr, msg, &mut client_request);
+            }
+        } else if let Some(req_hdr) = self.server_request_hdr.take() {
+            // Some server responses are linked to previous server responses. For example there
+            // can be multiple "helloOk" responses to a single "hello" message.
+            // TODO: Handle these for realz.
+            if hdr.response_to != req_hdr.request_id {
+                warn!("Server response {} does not match the prior server message {}", hdr.response_to, req_hdr.request_id);
+                SERVER_RESPONSE_REQUEST_MISMATCH.with_label_values(&["server"]).inc();
             }
         } else {
             warn!("No client request found for {:?}", hdr);
-            SERVER_RESPONSE_REQUEST_MISMATCH.inc();
         }
+
+        self.server_request_hdr = Some(hdr.clone());
     }
 
     fn observe_server_response_to(
@@ -694,10 +722,10 @@ impl MongoStatsTracker{
         if let Some(op) = doc.get_str("op") {
             if (op == "hosts") || (op == "helloOk") || (op == "topologyVersion") {
                 if let Some(replicaset) = doc.get_str("replicaset") {
-                    self.replicaset = replicaset.to_owned();
+                    replicaset.clone_into(&mut self.replicaset);
                 }
                 if let Some(server_host) = doc.get_str("server_host") {
-                    self.server_host = server_host.to_owned();
+                    server_host.clone_into(&mut self.server_host);
                 }
             }
         }
