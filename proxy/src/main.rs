@@ -331,15 +331,19 @@ async fn proxy_loop(
                     // TODO: Increase a counter
                     break;
                 }
+                // TODO: Remove this
+                debug!("Have message, will send to tracker");
                 if let Err(e) = tracker.send((is_client, hdr, msg)).await {
-                    warn!("error sending message to server tracker: {e}");
+                    warn!("error sending message to tracker: {e}");
                     // TODO: Increase a counter
                     break;
                 }
+                // TODO: Remove this
+                debug!("Sent to tracker");
             },
             Err(ProxyError::EOF) => break,
             Err(e) => {
-                warn!("error processing server message: {e}");
+                warn!("error getting Mongo message from reader: {e}");
                 break;
             },
         }
