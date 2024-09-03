@@ -156,17 +156,16 @@ impl MongoMessageProxy {
         }
     }
 
-    // Read a MongoDb message from one stream and write it to another. Return the parsed message header
-    // and body.
-    pub async fn proxy_mongo_message<R, W>(
+    // Read a MongoDb message from one stream and write it to another. Return the parsed message header,
+    // body and the raw bytes. The returned buffer is only valid until the next proxy_mongo_message call.
+    //
+    pub async fn proxy_mongo_message<R>(
         &mut self,
         read_source: &str,
         reader: &mut R,
-        writer: &mut W,
-    ) -> std::result::Result<(MsgHeader, MongoMessage), ProxyError>
+    ) -> std::result::Result<(MsgHeader, MongoMessage, &bytes::BytesMut), ProxyError>
         where
             R: tokio::io::AsyncRead+tokio::io::AsyncReadExt+Unpin,
-            W: tokio::io::AsyncWrite+tokio::io::AsyncWriteExt+Unpin,
     {
         self.buf.clear();
         while self.buf.len() < HEADER_LENGTH {
@@ -195,44 +194,35 @@ impl MongoMessageProxy {
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
-        writer.write_all(&self.buf)
-            .await
-            .map_err(ProxyError::IoError)?;
-
         // Collect the message length worth of bytes. Don't take any more than
-        // is needed so that we can safely clear the buffer here without losing
+        // is needed so that we can safely clear the buffer later without losing
         // any unprocessed bytes.
-        let message_length = hdr.message_length - HEADER_LENGTH;
-        self.buf.clear();
-        while self.buf.len() < message_length {
-            let remaining_bytes = (message_length - self.buf.len()) as u64;
+        // TODO: Move this to a separate function
+        while self.buf.len() < hdr.message_length {
+            let remaining_bytes = (hdr.message_length - self.buf.len()) as u64;
             let len = reader.take(remaining_bytes).read_buf(&mut self.buf)
                 .await
                 .map_err(ProxyError::IoError)?;
-            debug!("Read {len} of the required {message_length} bytes.");
+            debug!("Read {len} of the required {} bytes.", hdr.message_length);
 
             if len == 0 {
-                warn!("Out of data when reading message. Have {len} of {message_length}");
+                warn!("Out of data when reading message. Have {len} of {}", hdr.message_length);
                 return Err(ProxyError::PartialData)
             }
         }
-
-        writer.write_all(&self.buf)
-            .await
-            .map_err(ProxyError::IoError)?;
 
         READ_BUFFER_SIZE.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
         READ_BUFFER_CAPACITY.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
 
         match MongoMessage::extract_message(
             hdr.op_code,
-            &mut &self.buf[..],
+            &mut &self.buf[HEADER_LENGTH..],
             self.log_mongo_messages,
             self.collect_tracing_data,
-            message_length as u64).await
+            (hdr.message_length - HEADER_LENGTH) as u64).await
         {
             Ok(msg) => {
-                Ok((hdr, msg))
+                Ok((hdr, msg, &self.buf))
             },
             Err(e) => {
                 error!("Failed to parse MongoDb {} message: {}", hdr.op_code, e);
@@ -1051,17 +1041,20 @@ mod tests {
         let buflen = buf.len();
         let input = buf.clone();
         let mut cur = std::io::Cursor::new(buf);
-        let mut out = Vec::new();
         let mut messages = Vec::new();
         let mut message_proxy = MongoMessageProxy::new(1024, false, true);
+        let mut bytes_read = 0;
+        let mut output = Vec::new();
 
-        while let Ok((_, msg)) = message_proxy.proxy_mongo_message("client", &mut cur, &mut out).await {
+        while let Ok((hdr, msg, out)) = message_proxy.proxy_mongo_message("client", &mut cur).await {
             messages.push(msg);
+            bytes_read += hdr.message_length;
+            output.extend_from_slice(&out[..]);
+            assert_eq!(hdr.message_length, out.len());
         }
 
-        // Expect all bytes to have been proxied
-        assert_eq!(buflen, out.len());
-        assert_eq!(input, out);
+        assert_eq!(buflen, bytes_read);
+        assert_eq!(input, output);
 
         // Expect all messages have been parsed
         assert_eq!(3, messages.len());

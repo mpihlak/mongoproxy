@@ -3,6 +3,7 @@ use std::net::{SocketAddr,ToSocketAddrs};
 use std::io;
 use std::str;
 
+use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener,TcpStream};
 use tokio::sync::mpsc::{self, Sender};
@@ -323,10 +324,16 @@ async fn proxy_loop(
 {
     let read_source = if is_client { "client" } else { "server" };
     loop {
-        match proxy.proxy_mongo_message(read_source, &mut read_from, &mut write_to).await {
-            Ok((hdr, msg)) => {
+        match proxy.proxy_mongo_message(read_source, &mut read_from).await {
+            Ok((hdr, msg, buf)) => {
+                if let Err(e) = write_to.write_all(&buf).await {
+                    warn!("error writing bytes to the other end: {e}");
+                    // TODO: Increase a counter
+                    break;
+                }
                 if let Err(e) = tracker.send((is_client, hdr, msg)).await {
                     warn!("error sending message to server tracker: {e}");
+                    // TODO: Increase a counter
                     break;
                 }
             },
