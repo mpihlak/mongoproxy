@@ -6,8 +6,8 @@ use crate::appconfig::AppConfig;
 use std::time::Instant;
 use std::collections::{HashMap, HashSet};
 
-use tracing::{debug, warn, info_span};
-use prometheus::{CounterVec, HistogramVec, Gauge};
+use tracing::{debug, info, info_span, warn};
+use prometheus::{Counter, CounterVec, Gauge, HistogramVec};
 
 use opentelemetry::trace::{Tracer, SpanKind, TraceContextExt};
 use opentelemetry::trace::Span as _Span;
@@ -93,11 +93,10 @@ lazy_static! {
             "Number of non-ok server responses",
             OP_LABELS).unwrap();
 
-    static ref SERVER_RESPONSE_REQUEST_MISMATCH: CounterVec =
-        register_counter_vec!(
+    static ref SERVER_RESPONSE_REQUEST_MISMATCH: Counter =
+        register_counter!(
             "mongoproxy_server_response_request_mismatch_total",
-            "Number of times mongoproxy was unable to match server response to a client request",
-            &["response_to"]
+            "Number of times mongoproxy was unable to match server response to a parent request"
         ).unwrap();
 
     static ref CLIENT_BYTES_SENT_TOTAL: CounterVec =
@@ -132,7 +131,7 @@ lazy_static! {
 // a risk of collision if there are multiple databases on the same server.
 pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), opentelemetry::Context>;
 
-pub type TrackerMessage = (bool, MsgHeader, MongoMessage);
+pub type TrackerMessage = (MsgHeader, MongoMessage);
 
 // Stripped down version of the client request. We need this mostly for timing
 // stats and metric labels.
@@ -144,6 +143,15 @@ struct ClientRequest {
     cursor_id: i64,
     span: Option<Span>,
     message_length: usize,
+}
+
+// Status of tracking operation
+#[derive(Debug, PartialEq)]
+pub enum TrackedStatus {
+    NotTracked,
+    WaitingServerRequest,
+    ResponseToClient(u32),
+    RequestMismatch,
 }
 
 impl ClientRequest {
@@ -371,11 +379,11 @@ pub struct MongoStatsTracker {
     client_application:     String,
     client_username:        String,
     client_request_hdr:     Option<(ClientRequest, MsgHeader)>,
-    server_request_hdr:     Option<MsgHeader>,
     replicaset:             String,
     server_host:            String,
     app:                    AppConfig,
-    tracker_rx:             Receiver<TrackerMessage>,
+    client_rx:              Receiver<TrackerMessage>,
+    server_rx:              Receiver<TrackerMessage>,
 }
 
 impl Drop for MongoStatsTracker {
@@ -394,29 +402,49 @@ impl MongoStatsTracker{
         server_addr: &str,
         server_addr_sa: std::net::SocketAddr,
         app: AppConfig,
-        tracker_rx: Receiver<TrackerMessage>,
+        client_rx: Receiver<TrackerMessage>,
+        server_rx: Receiver<TrackerMessage>,
     ) -> Self {
         MongoStatsTracker {
             client_addr: client_addr.to_string(),
             server_addr: server_addr.to_string(),
             server_addr_sa,
             client_request_hdr: None,
-            server_request_hdr: None,
             client_application: String::from(""),
             client_username: String::from(""),
             replicaset: String::from(""),
             server_host: String::from(""),
             app,
-            tracker_rx,
+            client_rx,
+            server_rx,
         }
     }
 
     pub async fn run_message_loop(&mut self) {
-        while let Some((from_client, hdr, msg)) = self.tracker_rx.recv().await {
-            if from_client {
-                self.track_client_request(&hdr, &msg);
-            } else {
-                self.track_server_response(&hdr, &msg);
+        // This deliberately only considers the case where client speaks and server
+        // answers. It is also possible for the server to speak on its own, ie. helloOk messages
+        // in response to initial client hello. This loop will not handle these and will
+        // cause the tracker to be blocked.
+        //
+        loop {
+            match self.client_rx.recv().await {
+                Some((client_hdr, client_msg)) => {
+                    self.track_client_request(client_hdr, client_msg);
+                },
+                None => {
+                    info!("EOF on client channel, tracker stopping.");
+                    return;
+                },
+            }
+
+            match self.server_rx.recv().await {
+                Some((server_hdr, server_msg)) => {
+                    self.track_server_response(server_hdr, server_msg);
+                },
+                None => {
+                    info!("EOF on server channel, tracker stopping.");
+                    return;
+                },
             }
         }
     }
@@ -425,30 +453,30 @@ impl MongoStatsTracker{
         self.app.tracer.is_some()
     }
 
-    pub fn track_client_request(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
+    pub fn track_client_request(&mut self, hdr: MsgHeader, msg: MongoMessage) -> TrackedStatus {
+        let _ = info_span!("track_client_request").enter();
+
         CLIENT_BYTES_SENT_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
-        let span = info_span!("track_client_request");
-        let _ = span.enter();
-
-        match msg {
+        match &msg {
             MongoMessage::Query(m) => {
                 self.maybe_extract_connection_metadata(&m.query);
             },
             MongoMessage::Msg(m) if !m.documents.is_empty() => {
                 self.maybe_extract_connection_metadata(&m.documents[0]);
             }
-            MongoMessage::None => return, // Ignore useless messages
+            MongoMessage::None => return TrackedStatus::NotTracked,
             _ => {}
         }
 
-        let req = ClientRequest::from(self, hdr.message_length, msg);
+        let req = ClientRequest::from(self, hdr.message_length, &msg);
 
         // If we're tracking cursors for tracing purposes then also handle
         // the cleanup.
-        self.maybe_kill_cursors(&req.op, msg);
+        self.maybe_kill_cursors(&req.op, &msg);
 
-        self.client_request_hdr = Some((req, hdr.clone()))
+        self.client_request_hdr = Some((req, hdr));
+        TrackedStatus::WaitingServerRequest
     }
 
     // The first isMaster message from client contains the connection metadata including the
@@ -514,38 +542,34 @@ impl MongoStatsTracker{
         ]
     }
 
-    pub fn track_server_response(&mut self, hdr: &MsgHeader, msg: &MongoMessage) {
-        CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
+    pub fn track_server_response(&mut self, hdr: MsgHeader, msg: MongoMessage) -> TrackedStatus {
+        _ = info_span!("track_server_response").enter();
 
-        let span = info_span!("track_server_response");
-        let _ = span.enter();
+        debug!("Server response header: {:?}", hdr);
+
+        CLIENT_BYTES_RECV_TOTAL.with_label_values(&[&self.client_addr]).inc_by(hdr.message_length as f64);
 
         // Ignore useless messages
         if let MongoMessage::None = msg {
-            return;
+            return TrackedStatus::NotTracked;
         }
 
-        if let Some((mut client_request, req_hdr)) = self.client_request_hdr.take() {
-            if hdr.response_to != req_hdr.request_id {
-                warn!("Server response to {} does not match client request {}",
-                    hdr.response_to, req_hdr.request_id);
-                SERVER_RESPONSE_REQUEST_MISMATCH.with_label_values(&["client"]).inc();
-            } else {
-                self.observe_server_response_to(hdr, msg, &mut client_request);
+        match self.client_request_hdr.take() {
+            Some((mut client_request, req_hdr)) if hdr.response_to == req_hdr.request_id => {
+                self.observe_server_response_to(&hdr, &msg, &mut client_request);
+                TrackedStatus::ResponseToClient(req_hdr.request_id)
+            },
+            Some((_, req_hdr)) => {
+                warn!("Server response to {} does not match previous client request {}", hdr.response_to, req_hdr.request_id);
+                SERVER_RESPONSE_REQUEST_MISMATCH.inc();
+                TrackedStatus::RequestMismatch
+            },
+            None => {
+                warn!("Previous client request not found for server response {} to {}", hdr.request_id, hdr.response_to);
+                SERVER_RESPONSE_REQUEST_MISMATCH.inc();
+                TrackedStatus::RequestMismatch
             }
-        } else if let Some(req_hdr) = self.server_request_hdr.take() {
-            // Some server responses are linked to previous server responses. For example there
-            // can be multiple "helloOk" responses to a single "hello" message.
-            // TODO: Handle these for realz.
-            if hdr.response_to != req_hdr.request_id {
-                warn!("Server response {} does not match the prior server message {}", hdr.response_to, req_hdr.request_id);
-                SERVER_RESPONSE_REQUEST_MISMATCH.with_label_values(&["server"]).inc();
-            }
-        } else {
-            warn!("No client request found for {:?}", hdr);
         }
-
-        self.server_request_hdr = Some(hdr.clone());
     }
 
     fn observe_server_response_to(
@@ -731,4 +755,100 @@ impl MongoStatsTracker{
         }
     }
 
+}
+
+#[cfg(test)]
+
+mod tests {
+    use mongo_protocol::OpCode;
+    use tracing_test::traced_test;
+
+    use super::*;
+
+    fn get_test_tracker() -> MongoStatsTracker {
+        let (_, client_rx) = tokio::sync::mpsc::channel::<TrackerMessage>(10);
+        let (_, server_rx) = tokio::sync::mpsc::channel::<TrackerMessage>(10);
+        MongoStatsTracker::new(
+            "1.2.3.4",
+            "4.3.2.1",
+            "4.3.2.1:123".parse().unwrap(),
+            AppConfig::new(None, false),
+            client_rx,
+            server_rx,
+        )
+    }
+
+    fn create_test_opmsg(request_id: u32, response_to: u32) -> (MsgHeader, MongoMessage) {
+        let hdr = MsgHeader{ message_length: 0, request_id, response_to, op_code: OpCode::OpMsg as u32 };
+        let msg = MongoMessage::Msg(MsgOpMsg{ flag_bits: 0, documents: vec![], section_bytes: vec![] });
+        (hdr, msg)
+    }
+
+    #[tokio::test]
+    async fn test_tracker_response_to_client() {
+        let mut tracker  = get_test_tracker();
+
+        let (request_hdr, request_msg) = create_test_opmsg(123, 0);
+        tracker.track_client_request(request_hdr, request_msg);
+
+        let (response_hdr, response_msg) = create_test_opmsg(321, 123);
+        let status = tracker.track_server_response(response_hdr, response_msg);
+        assert_eq!(TrackedStatus::ResponseToClient(123), status);
+
+        // Once more to ensure that subsequent requests are also correctly tracked
+        let (request_hdr, request_msg) = create_test_opmsg(124, 0);
+        tracker.track_client_request(request_hdr, request_msg);
+        let (response_hdr, response_msg) = create_test_opmsg(322, 124);
+        let status = tracker.track_server_response(response_hdr, response_msg);
+        assert_eq!(TrackedStatus::ResponseToClient(124), status);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_tracker_response_to_server() {
+        let mut tracker = get_test_tracker();
+
+        // Let's say client sends "hello"
+        let (request_hdr, request_msg) = create_test_opmsg(123, 0);
+        tracker.track_client_request(request_hdr, request_msg);
+
+        // Server responds with "helloOk"
+        let (response_hdr, response_msg) = create_test_opmsg(321, 123);
+        let status = tracker.track_server_response(response_hdr, response_msg);
+        assert_eq!(TrackedStatus::ResponseToClient(123), status);
+
+        // Server sends another "helloOk" in response to itself - we don't count these at the moment
+        let (response_hdr, response_msg) = create_test_opmsg(999, 321);
+        let status = tracker.track_server_response(response_hdr, response_msg);
+        assert_eq!(TrackedStatus::RequestMismatch, status);
+    }
+
+    #[tokio::test]
+    async fn test_tracker_invalid_parent() {
+        let mut tracker = get_test_tracker();
+
+        // No previous client request
+        let (response_hdr, response_msg) = create_test_opmsg(123, 1);
+        let status = tracker.track_server_response(response_hdr, response_msg);
+        assert_eq!(TrackedStatus::RequestMismatch, status);
+
+        // Response to another request
+        let (request_hdr, request_msg) = create_test_opmsg(123, 0);
+        tracker.track_client_request(request_hdr, request_msg);
+        let (response_hdr, response_msg) = create_test_opmsg(321, 999);
+        let status = tracker.track_server_response(response_hdr, response_msg);
+        assert_eq!(TrackedStatus::RequestMismatch, status);
+
+        // Response to a stale request 123
+        let (response_hdr, response_msg) = create_test_opmsg(321, 123);
+        let status = tracker.track_server_response(response_hdr, response_msg);
+        assert_eq!(TrackedStatus::RequestMismatch, status);
+
+        // In the end a valid request/response combination should work
+        let (request_hdr, request_msg) = create_test_opmsg(123, 0);
+        tracker.track_client_request(request_hdr, request_msg);
+        let (response_hdr, response_msg) = create_test_opmsg(321, 123);
+        let status = tracker.track_server_response(response_hdr, response_msg);
+        assert_eq!(TrackedStatus::ResponseToClient(123), status);
+    }
 }

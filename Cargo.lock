@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "mongoproxy"
-version = "0.5.32"
+version = "0.5.34"
 dependencies = [
  "async-bson",
  "bson",
@@ -627,6 +627,7 @@ dependencies = [
  "tracing-appender",
  "tracing-futures",
  "tracing-subscriber 0.2.25",
+ "tracing-test",
 ]
 
 [[package]]
