@@ -326,7 +326,7 @@ async fn proxy_loop(
     loop {
         match proxy.proxy_mongo_message(read_source, &mut read_from).await {
             Ok((hdr, msg, buf)) => {
-                if let Err(e) = write_to.write_all(&buf).await {
+                if let Err(e) = write_to.write_all(buf).await {
                     warn!("error writing bytes to the other end: {e}");
                     // TODO: Increase a counter
                     break;
