@@ -173,7 +173,10 @@ impl MongoMessageProxy {
             let remaining_bytes = (HEADER_LENGTH - self.buf.len()) as u64;
             let len = reader.take(remaining_bytes).read_buf(&mut self.buf)
                 .await
-                .map_err(ProxyError::IoError)?;
+                .map_err(|e| {
+                    warn!("error reading message header: {e}");
+                    ProxyError::IoError(e)
+                })?;
             debug!("Read {len} of the required header bytes.");
 
             if len == 0 {
@@ -195,9 +198,13 @@ impl MongoMessageProxy {
 
         OPCODE_COUNTER.with_label_values(&[&hdr.op_code.to_string()]).inc();
 
+        debug!("Proxying header bytes");
         writer.write_all(&self.buf)
             .await
-            .map_err(ProxyError::IoError)?;
+            .map_err(|e| {
+                warn!("error proxying message bytes: {e}");
+                ProxyError::IoError(e)
+            })?;
 
         // Collect the message length worth of bytes. Don't take any more than
         // is needed so that we can safely clear the buffer here without losing
@@ -208,7 +215,10 @@ impl MongoMessageProxy {
             let remaining_bytes = (message_length - self.buf.len()) as u64;
             let len = reader.take(remaining_bytes).read_buf(&mut self.buf)
                 .await
-                .map_err(ProxyError::IoError)?;
+                .map_err(|e| {
+                    warn!("error reading message body: {e}");
+                    ProxyError::IoError(e)
+                })?;
             debug!("Read {len} of the required {message_length} bytes.");
 
             if len == 0 {
@@ -219,7 +229,10 @@ impl MongoMessageProxy {
 
         writer.write_all(&self.buf)
             .await
-            .map_err(ProxyError::IoError)?;
+            .map_err(|e| {
+                warn!("error proxying message bytes: {e}");
+                ProxyError::IoError(e)
+            })?;
 
         READ_BUFFER_SIZE.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
         READ_BUFFER_CAPACITY.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
