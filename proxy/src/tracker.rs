@@ -1,6 +1,6 @@
 use mongo_protocol::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
 use tokio::sync::mpsc::Receiver;
-use crate::jaeger_tracing;
+use crate::trace_propagation;
 use crate::appconfig::AppConfig;
 
 use std::time::Instant;
@@ -9,10 +9,11 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, info_span, warn};
 use prometheus::{Counter, CounterVec, Gauge, HistogramVec};
 
-use opentelemetry::trace::{Tracer, SpanKind, TraceContextExt};
+use opentelemetry::global::{self, BoxedSpan};
+use opentelemetry::trace::TraceContextExt;
+use opentelemetry::trace::{Tracer, SpanKind};
 use opentelemetry::trace::Span as _Span;
-use opentelemetry::sdk::trace::Span;
-use opentelemetry::KeyValue;
+use opentelemetry::{Context, KeyValue};
 
 use async_bson::Document;
 
@@ -129,7 +130,7 @@ lazy_static! {
 //
 // XXX: If the cursor id's are not unique within a MongoDb instance then there's
 // a risk of collision if there are multiple databases on the same server.
-pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), opentelemetry::Context>;
+pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), Context>;
 
 pub type TrackerMessage = (MsgHeader, MongoMessage);
 
@@ -141,7 +142,7 @@ struct ClientRequest {
     db: String,
     coll: String,
     cursor_id: i64,
-    span: Option<Span>,
+    span: Option<BoxedSpan>,
     message_length: usize,
 }
 
@@ -285,12 +286,11 @@ impl ClientRequest {
         coll: &str,
         op: &str,
         doc: &Document,
-    ) -> Option<(i64, Span)> {
-
-        let tracer = match &tracker.app.tracer {
-            Some(t) => t,
-            _ => return None,
-        };
+    ) -> Option<(i64, BoxedSpan)> {
+        if !tracker.app.tracing_enabled {
+            return None
+        }
+        let tracer = global::tracer("mongoproxy");
 
         if op == "getMore" {
             // getMore operations will not have a client provided trace id. Instead we need follow
@@ -301,8 +301,8 @@ impl ClientRequest {
                 let trace_mapper = tracker.app.trace_mapper.lock().unwrap();
 
                 // Look up the text representation of the parent span
-                let parent_span_ctx = match trace_mapper.get(&(tracker.server_addr_sa, cursor)) {
-                    Some(parent_trace_id) => parent_trace_id,
+                let parent_ctx = match trace_mapper.get(&(tracker.server_addr_sa, cursor)) {
+                    Some(parent) => parent,
                     _ => {
                         debug!("Parent span not found for cursor_id={}", cursor);
                         return None;
@@ -313,10 +313,10 @@ impl ClientRequest {
                 // trace_mapper just yet. Unfortunately we only get the cursor id in the response
                 // document of the first "find", so that's where we put add it to the trace_mapper.
 
-                let span = tracer.span_builder(op)
-                    .with_parent_context(parent_span_ctx.clone())
+                let span = tracer.span_builder(op.to_string())
                     .with_kind(SpanKind::Server)
-                    .start(tracer);
+                    .start_with_context(&tracer, parent_ctx);
+
                 debug!("Started getMore span: {:?}", span.span_context());
 
                 return Some((cursor, span));
@@ -325,7 +325,7 @@ impl ClientRequest {
             // Otherwise we look up the parent trace id from the $comment field of
             // the query.
 
-            let parent = match jaeger_tracing::extract_from_text(comment) {
+            let parent = match trace_propagation::extract_from_text(comment) {
                 Some(parent) => parent,
                 _ => {
                     debug!("No trace id found in $comment");
@@ -333,10 +333,8 @@ impl ClientRequest {
                 },
             };
 
-            debug!("Extracted trace header: {:?}", parent);
-            let span = tracer
-                .span_builder(op)
-                .with_parent_context(parent)
+            debug!("Extracted trace header: {:?}, has_active_span={}", parent, parent.has_active_span());
+            let mut span = tracer.span_builder(op.to_string())
                 .with_kind(SpanKind::Server)
                 .with_attributes(vec![
                     KeyValue::new("db.mongodb.collection", coll.to_owned()),
@@ -346,7 +344,7 @@ impl ClientRequest {
                     KeyValue::new("db.server.addr", tracker.server_addr.clone()),
                     KeyValue::new("db.client.app", tracker.client_application.clone()),
                 ])
-                .start(tracer);
+                .start_with_context(&tracer, &parent);
             debug!("Started initial span: {:?}", span.span_context());
 
             // Tag the span with all the documents in the message. This will give
@@ -450,7 +448,7 @@ impl MongoStatsTracker{
     }
 
     fn is_tracing_enabled(&self) -> bool {
-        self.app.tracer.is_some()
+        self.app.tracing_enabled
     }
 
     pub fn track_client_request(&mut self, hdr: MsgHeader, msg: MongoMessage) -> TrackedStatus {
@@ -730,9 +728,8 @@ impl MongoStatsTracker{
                         debug!("Saving parent trace for cursor_id={}", cursor_id);
                         let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
-                        let cx = opentelemetry::Context::current_with_span(span.clone());
-
-                        trace_mapper.insert((self.server_addr_sa, cursor_id), cx);
+                        let parent_ctx = Context::with_remote_span_context(&Context::new(), span.span_context().clone());
+                        trace_mapper.insert((self.server_addr_sa, cursor_id), parent_ctx);
                         CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);
                     }
                 } else if client_request.op != "getMore" {
@@ -772,7 +769,7 @@ mod tests {
             "1.2.3.4",
             "4.3.2.1",
             "4.3.2.1:123".parse().unwrap(),
-            AppConfig::new(None, false),
+            AppConfig::new(false, false),
             client_rx,
             server_rx,
         )
