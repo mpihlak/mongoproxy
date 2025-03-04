@@ -17,14 +17,14 @@ use opentelemetry::KeyValue;
 use async_bson::Document;
 
 // Common labels for all op metrics
-const OP_LABELS: &[&str] = &["client", "app", "op", "collection", "db", "replicaset", "server", "username"];
+const OP_LABELS: &[&str] = &["client", "appname", "op", "collection", "db", "replicaset", "server", "username"];
 
 lazy_static! {
     static ref APP_CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
             "mongoproxy_app_connections_established_total",
             "Total number of client connections established",
-            &["app"]).unwrap();
+            &["appname"]).unwrap();
 
     // This is a separate counter because the app and user label values arrive at different
     // times (if at all). So there is no good way to determine if we have both.
@@ -38,7 +38,7 @@ lazy_static! {
         register_counter_vec!(
             "mongoproxy_app_disconnections_total",
             "Total number of client disconnections",
-            &["app", "username"]).unwrap();
+            &["appname", "username"]).unwrap();
 
     static ref UNSUPPORTED_OPNAME_COUNTER: CounterVec =
         register_counter_vec!(
