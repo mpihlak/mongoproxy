@@ -4,24 +4,28 @@ use std::io;
 use std::str;
 
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use opentelemetry_sdk::Resource;
 use tokio::net::{TcpListener,TcpStream};
 use tokio::sync::mpsc::{self, Sender};
 use tokio::task::JoinSet;
 
-use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::trace;
+use opentelemetry::{global, KeyValue};
+
+use prometheus::{register_histogram_vec, register_counter_vec};
+use prometheus::{Encoder, TextEncoder,CounterVec,HistogramVec};
+
 use clap::{Arg, App, crate_version};
 use tracing::{info, warn, error, debug, info_span, Instrument, Level};
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use lazy_static::lazy_static;
-
-#[macro_use] extern crate prometheus;
 
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode,
 };
 
-use mongoproxy::jaeger_tracing;
 use mongoproxy::dstaddr;
 use mongoproxy::appconfig::AppConfig;
 use mongoproxy::tracker::{MongoStatsTracker, TrackerMessage};
@@ -29,7 +33,7 @@ use mongoproxy::tracker::{MongoStatsTracker, TrackerMessage};
 use mongo_protocol::{MongoMessageProxy, ProxyError};
 
 
-const JAEGER_ADDR: &str = "127.0.0.1:6831";
+const OTLP_ENDPOINT: &str = "http://127.0.0.1:4317";
 const ADMIN_PORT: &str = "9898";
 const SERVICE_NAME: &str = "mongoproxy";
 
@@ -46,7 +50,7 @@ lazy_static! {
         register_counter_vec!(
             "mongoproxy_runtime_info",
             "Runtime information about Mongoproxy",
-            &["version", "proxy", "service_name", "log_mongo_messages", "enable_jaeger"]).unwrap();
+            &["version", "proxy", "service_name", "log_mongo_messages", "enable_otlp"]).unwrap();
 
     static ref CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -95,21 +99,21 @@ async fn main() {
             .help("Log the contents of MongoDb messages (adds full BSON parsing)")
             .takes_value(false)
             .required(false))
-        .arg(Arg::with_name("enable_jaeger")
-            .long("enable-jaeger")
-            .help("Enable distributed tracing with Jaeger")
+        .arg(Arg::with_name("enable_otlp")
+            .long("enable-otlp")
+            .help("Enable distributred tracing with OTLP")
             .takes_value(false)
             .required(false))
-        .arg(Arg::with_name("jaeger_addr")
-            .long("jaeger-addr")
-            .value_name("Jaeger agent host:port")
-            .help("Jaeger agent hostport to send traces to (compact thrift protocol)")
+        .arg(Arg::with_name("otlp_endpoint")
+            .long("otlp-endpoint")
+            .value_name("OTLP collector host:port")
+            .help("OTLP collector gRPC endpoint to send traces to)")
             .takes_value(true)
             .required(false))
         .arg(Arg::with_name("service_name")
             .long("service-name")
             .value_name("SERVICE_NAME")
-            .help("Service name that will be used in Jaeger traces and metric labels")
+            .help("Service name that will be used in traces and metric labels")
             .takes_value(true))
         .arg(Arg::with_name("admin_port")
             .long("admin-port")
@@ -122,8 +126,8 @@ async fn main() {
     let admin_addr = format!("0.0.0.0:{}", admin_port);
     let service_name = matches.value_of("service_name").unwrap_or(SERVICE_NAME);
     let log_mongo_messages = matches.occurrences_of("log_mongo_messages") > 0;
-    let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
-    let jaeger_addr = lookup_address(matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR)).unwrap();
+    let enable_otlp = matches.occurrences_of("enable_otlp") > 0;
+    let otlp_endpoint = matches.value_of("otlp_endpoint").unwrap_or(OTLP_ENDPOINT);
 
     let (writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
     let subscriber = FmtSubscriber::builder()
@@ -145,10 +149,23 @@ async fn main() {
     let proxy_spec = matches.value_of("proxy").unwrap();
     let (local_hostport, remote_hostport) = parse_proxy_addresses(proxy_spec).unwrap();
 
-    let (tracer, _uninstall) = jaeger_tracing::init_tracer(enable_jaeger, service_name, jaeger_addr);
+    let otlp_exporter = opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint(otlp_endpoint);
+    let trace_provider = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(otlp_exporter)
+        .with_trace_config(
+            trace::Config::default()
+                .with_resource(Resource::new(vec![KeyValue::new("service.name", "mongoproxy")])),
+        )
+        .install_batch(opentelemetry_sdk::runtime::Tokio)
+        .expect("failed to create OTLP exporter");
+
+    global::set_tracer_provider(trace_provider);
 
     let app = AppConfig::new(
-        tracer,
+        enable_otlp,
         log_mongo_messages,
     );
 
@@ -157,7 +174,7 @@ async fn main() {
         proxy_spec,
         service_name,
         if log_mongo_messages { "true" } else { "false" },
-        if enable_jaeger { "true" } else { "false" } ],
+        if enable_otlp { "true" } else { "false" } ],
     ).inc();
 
     run_accept_loop(local_hostport, remote_hostport, app).await;
@@ -259,7 +276,7 @@ async fn handle_connection(server_addr: &str, client_stream: TcpStream, app: App
     let client_addr = format_client_address(&client_stream.peer_addr()?);
 
     let log_mongo_messages = app.log_mongo_messages;
-    let tracing_enabled = app.tracer.is_some();
+    let tracing_enabled = app.tracing_enabled;
 
     client_stream.set_nodelay(true)?;
     server_stream.set_nodelay(true)?;
