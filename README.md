@@ -60,7 +60,7 @@ Per-request histograms:
 * `mongoproxy_client_request_bytes_total` - Request size distribution.
 * `mongoproxy_server_response_bytes_total` - Response size distribution.
 
-All per-request metrics are labeled with `client` (IP address), `app` (appName from connection metadata), `op`, `collection`, `db`, `server` and `replicaset`. 
+All per-request metrics are labeled with `client` (IP address), `appname` (appName from connection metadata), `op`, `collection`, `db`, `server` and `replicaset`. 
 
 Connection counters
 * `mongoproxy_client_connections_established_total`
