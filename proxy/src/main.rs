@@ -1,7 +1,8 @@
 use std::convert::Infallible;
 use std::net::{SocketAddr,ToSocketAddrs};
-use std::io;
+use std::io::{self, IsTerminal};
 use std::str;
+use std::time::Duration;
 
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener,TcpStream};
@@ -9,17 +10,18 @@ use tokio::sync::mpsc::{self, Sender};
 use tokio::task::JoinSet;
 
 use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
-use clap::{Arg, App, crate_version};
+use clap::{Arg, ArgAction, Command, crate_version};
 use tracing::{info, warn, error, debug, info_span, Instrument, Level};
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use lazy_static::lazy_static;
 
 #[macro_use] extern crate prometheus;
 
-use hyper::{
-    service::{make_service_fn, service_fn},
-    Body, Method, Request, Response, Server, StatusCode,
-};
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::{body::Incoming, service::service_fn, Method, Request, Response, StatusCode};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::server::conn::auto;
 
 use mongoproxy::jaeger_tracing;
 use mongoproxy::dstaddr;
@@ -81,56 +83,49 @@ lazy_static! {
 
 #[tokio::main]
 async fn main() {
-    let matches = App::new("mongoproxy")
+    let matches = Command::new("mongoproxy")
         .version(crate_version!())
         .about("Proxies MongoDb requests to obtain metrics")
-        .arg(Arg::with_name("proxy")
+        .arg(Arg::new("proxy")
             .long("proxy")
             .value_name("local-port[:remote-host:remote-port]")
             .help("Port the proxy listens on (sidecar) and optionally\na target hostport (for static proxy)")
-            .takes_value(true)
             .required(true))
-        .arg(Arg::with_name("log_mongo_messages")
+        .arg(Arg::new("log_mongo_messages")
             .long("log-mongo-messages")
             .help("Log the contents of MongoDb messages (adds full BSON parsing)")
-            .takes_value(false)
-            .required(false))
-        .arg(Arg::with_name("enable_jaeger")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("enable_jaeger")
             .long("enable-jaeger")
             .help("Enable distributed tracing with Jaeger")
-            .takes_value(false)
-            .required(false))
-        .arg(Arg::with_name("jaeger_addr")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("jaeger_addr")
             .long("jaeger-addr")
             .value_name("Jaeger agent host:port")
-            .help("Jaeger agent hostport to send traces to (compact thrift protocol)")
-            .takes_value(true)
-            .required(false))
-        .arg(Arg::with_name("service_name")
+            .help("Jaeger agent hostport to send traces to (compact thrift protocol)"))
+        .arg(Arg::new("service_name")
             .long("service-name")
             .value_name("SERVICE_NAME")
-            .help("Service name that will be used in Jaeger traces and metric labels")
-            .takes_value(true))
-        .arg(Arg::with_name("admin_port")
+            .help("Service name that will be used in Jaeger traces and metric labels"))
+        .arg(Arg::new("admin_port")
             .long("admin-port")
             .value_name("ADMIN_PORT")
-            .help(&format!("Port the admin endpoints listens on (metrics and health). Default {}", ADMIN_PORT))
-            .takes_value(true))
+            .help(format!("Port the admin endpoints listens on (metrics and health). Default {}", ADMIN_PORT)))
         .get_matches();
 
-    let admin_port = matches.value_of("admin_port").unwrap_or(ADMIN_PORT);
+    let admin_port = matches.get_one::<String>("admin_port").map_or(ADMIN_PORT, String::as_str);
     let admin_addr = format!("0.0.0.0:{}", admin_port);
-    let service_name = matches.value_of("service_name").unwrap_or(SERVICE_NAME);
-    let log_mongo_messages = matches.occurrences_of("log_mongo_messages") > 0;
-    let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
-    let jaeger_addr = lookup_address(matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR)).unwrap();
+    let service_name = matches.get_one::<String>("service_name").map_or(SERVICE_NAME, String::as_str);
+    let log_mongo_messages = matches.get_flag("log_mongo_messages");
+    let enable_jaeger = matches.get_flag("enable_jaeger");
+    let jaeger_addr = lookup_address(matches.get_one::<String>("jaeger_addr").map_or(JAEGER_ADDR, String::as_str)).unwrap();
 
     let (writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)
         .with_writer(writer)
         .with_env_filter(EnvFilter::from_default_env())
-        .with_ansi(isatty::stdout_isatty())
+        .with_ansi(io::stdout().is_terminal())
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)
@@ -138,11 +133,11 @@ async fn main() {
 
     info!("MongoProxy v{}", crate_version!());
 
-    start_admin_listener(&admin_addr)
+    start_admin_listener(&admin_addr).await
         .expect("failed to start admin listener");
     info!("Admin endpoint at http://{}", admin_addr);
 
-    let proxy_spec = matches.value_of("proxy").unwrap();
+    let proxy_spec = matches.get_one::<String>("proxy").unwrap();
     let (local_hostport, remote_hostport) = parse_proxy_addresses(proxy_spec).unwrap();
 
     let (tracer, _uninstall) = jaeger_tracing::init_tracer(enable_jaeger, service_name, jaeger_addr);
@@ -379,15 +374,15 @@ fn parse_proxy_addresses(proxy_def: &str) -> Result<(String,String), io::Error> 
     }
 }
 
-async fn serve_admin_req(req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    let mut response = Response::new(Body::empty());
+async fn serve_admin_req(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
+    let mut response = Response::new(Full::default());
 
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/") => {
-            *response.body_mut() = Body::from("/");
+            *response.body_mut() = Full::from("/");
         },
         (&Method::GET, "/health") => {
-            *response.body_mut() = Body::from("OK");
+            *response.body_mut() = Full::from("OK");
         },
         (&Method::GET, "/metrics") => {
             let encoder = TextEncoder::new();
@@ -395,7 +390,7 @@ async fn serve_admin_req(req: Request<Body>) -> Result<Response<Body>, Infallibl
             let mut buffer = vec![];
             encoder.encode(&metric_families, &mut buffer).unwrap();
 
-            *response.body_mut() = Body::from(buffer);
+            *response.body_mut() = Full::from(buffer);
         },
         _ => {
             *response.status_mut() = StatusCode::NOT_FOUND;
@@ -405,17 +400,32 @@ async fn serve_admin_req(req: Request<Body>) -> Result<Response<Body>, Infallibl
     Ok(response)
 }
 
-pub fn start_admin_listener(endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let endpoint = endpoint.to_string();
+pub async fn start_admin_listener(endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = endpoint.parse()?;
+    let listener = TcpListener::bind(addr).await?;
 
     tokio::spawn(async move {
-        Server::bind(&addr)
-            .serve(make_service_fn(|_conn| async {
-                Ok::<_, Infallible>(service_fn(serve_admin_req))
-            }))
-            .await?;
-        Ok::<(), hyper::Error>(())
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    tokio::spawn(async move {
+                        if let Err(e) = auto::Builder::new(TokioExecutor::new())
+                            .http1()
+                            .timer(TokioTimer::new())
+                            .serve_connection(TokioIo::new(stream), service_fn(serve_admin_req))
+                            .await
+                        {
+                            debug!("admin connection error: {}", e);
+                        }
+                    });
+                },
+                Err(e) => {
+                    warn!("admin accept: {:?}", e);
+                    // Errors such as EMFILE repeat immediately, back off instead of spinning.
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                },
+            }
+        }
     });
 
     Ok(())

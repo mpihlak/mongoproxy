@@ -700,7 +700,7 @@ mod tests {
             "an_f64": 3.14,
             "an_i32": 123i32,
             "an_i64": 12345678910i64,
-            "oid": bson::oid::ObjectId::with_bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+            "oid": bson::oid::ObjectId::from_bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
             "bool": true,
             "nested": {
                 "monkey": {
