@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::net::{SocketAddr,ToSocketAddrs};
 use std::io::{self, IsTerminal};
 use std::str;
+use std::time::Duration;
 
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener,TcpStream};
@@ -16,10 +17,11 @@ use lazy_static::lazy_static;
 
 #[macro_use] extern crate prometheus;
 
-use hyper::{
-    service::{make_service_fn, service_fn},
-    Body, Method, Request, Response, Server, StatusCode,
-};
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::{body::Incoming, service::service_fn, Method, Request, Response, StatusCode};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::server::conn::auto;
 
 use mongoproxy::jaeger_tracing;
 use mongoproxy::dstaddr;
@@ -131,7 +133,7 @@ async fn main() {
 
     info!("MongoProxy v{}", crate_version!());
 
-    start_admin_listener(&admin_addr)
+    start_admin_listener(&admin_addr).await
         .expect("failed to start admin listener");
     info!("Admin endpoint at http://{}", admin_addr);
 
@@ -372,15 +374,15 @@ fn parse_proxy_addresses(proxy_def: &str) -> Result<(String,String), io::Error> 
     }
 }
 
-async fn serve_admin_req(req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    let mut response = Response::new(Body::empty());
+async fn serve_admin_req(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
+    let mut response = Response::new(Full::default());
 
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/") => {
-            *response.body_mut() = Body::from("/");
+            *response.body_mut() = Full::from("/");
         },
         (&Method::GET, "/health") => {
-            *response.body_mut() = Body::from("OK");
+            *response.body_mut() = Full::from("OK");
         },
         (&Method::GET, "/metrics") => {
             let encoder = TextEncoder::new();
@@ -388,7 +390,7 @@ async fn serve_admin_req(req: Request<Body>) -> Result<Response<Body>, Infallibl
             let mut buffer = vec![];
             encoder.encode(&metric_families, &mut buffer).unwrap();
 
-            *response.body_mut() = Body::from(buffer);
+            *response.body_mut() = Full::from(buffer);
         },
         _ => {
             *response.status_mut() = StatusCode::NOT_FOUND;
@@ -398,17 +400,32 @@ async fn serve_admin_req(req: Request<Body>) -> Result<Response<Body>, Infallibl
     Ok(response)
 }
 
-pub fn start_admin_listener(endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let endpoint = endpoint.to_string();
+pub async fn start_admin_listener(endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = endpoint.parse()?;
+    let listener = TcpListener::bind(addr).await?;
 
     tokio::spawn(async move {
-        Server::bind(&addr)
-            .serve(make_service_fn(|_conn| async {
-                Ok::<_, Infallible>(service_fn(serve_admin_req))
-            }))
-            .await?;
-        Ok::<(), hyper::Error>(())
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    tokio::spawn(async move {
+                        if let Err(e) = auto::Builder::new(TokioExecutor::new())
+                            .http1()
+                            .timer(TokioTimer::new())
+                            .serve_connection(TokioIo::new(stream), service_fn(serve_admin_req))
+                            .await
+                        {
+                            debug!("admin connection error: {}", e);
+                        }
+                    });
+                },
+                Err(e) => {
+                    warn!("admin accept: {:?}", e);
+                    // Errors such as EMFILE repeat immediately, back off instead of spinning.
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                },
+            }
+        }
     });
 
     Ok(())
