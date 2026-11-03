@@ -1,4 +1,4 @@
-FROM rust:1.74-bookworm as builder
+FROM rust:1.99-trixie as builder
 
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
@@ -12,12 +12,12 @@ COPY async-bson/ ./async-bson
 RUN cargo build --release
 RUN cargo test --release
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y iptables
 RUN update-alternatives --set iptables /usr/sbin/iptables-legacy
 
-RUN adduser --uid 9999 --disabled-password --gecos '' mongoproxy
+RUN useradd --uid 9999 --create-home mongoproxy
 USER mongoproxy
 
 WORKDIR /mongoproxy
