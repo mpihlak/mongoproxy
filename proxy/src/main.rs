@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 use std::net::{SocketAddr,ToSocketAddrs};
-use std::io;
+use std::io::{self, IsTerminal};
 use std::str;
 
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -130,7 +130,7 @@ async fn main() {
         .with_max_level(Level::TRACE)
         .with_writer(writer)
         .with_env_filter(EnvFilter::from_default_env())
-        .with_ansi(isatty::stdout_isatty())
+        .with_ansi(io::stdout().is_terminal())
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)
