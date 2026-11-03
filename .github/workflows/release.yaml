@@ -5,20 +5,72 @@ permissions:
 
 on:
   push:
-    tags:
-      - v[0-9]+.*
+    branches:
+      - master
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  create-release:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        run: |
+          tag="v$(.github/scripts/version.sh)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            changed=$(.github/scripts/code-changes.sh "$tag" HEAD)
+            if [ -n "$changed" ]; then
+              echo "::error file=proxy/Cargo.toml::Code changed since $tag without a version bump:"
+              echo "$changed"
+              exit 1
+            fi
+            echo "Tag $tag already exists, nothing to release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: check
+    if: needs.check.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: cargo test --release
+
+  create-release:
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # "Re-run failed jobs" keeps the check outputs, so the tag can already exist here.
+      - name: Push tag
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG exists"
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "$TAG"
+          fi
       - uses: taiki-e/create-gh-release-action@v1
         with:
+          ref: refs/tags/${{ needs.check.outputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   upload-assets:
-    needs: create-release
+    needs: [check, create-release]
     strategy:
       matrix:
         include:
@@ -42,4 +94,37 @@ jobs:
         with:
           bin: mongoproxy
           target: ${{ matrix.target }}
+          ref: refs/tags/${{ needs.check.outputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  build-images:
+    needs: [check, create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: mpihlak
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: mpihlak/mongoproxy
+          tags: |
+            type=raw,value=${{ needs.check.outputs.tag }}
+            type=raw,value=latest
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

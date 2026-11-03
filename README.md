@@ -79,3 +79,8 @@ Example:
 Mongoproxy will not create tracing spans unless the application explicitly requests it. The application does this by passing the trace id in the `$comment` field of the MongoDb query. So, for example if a `find` operation has `uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1` in the comment, the proxy picks this up and will create a child span for the `find` operation. Like this:
 
 ![Trace example](https://github.com/mpihlak/mongoproxy/blob/master/img/trace.png)
+
+## Releasing
+Every push to `master` releases the version in `proxy/Cargo.toml` if the tag `v<version>` does not exist yet. The release workflow runs the tests, then creates the tag, the GitHub release with Linux binaries, and the `mpihlak/mongoproxy:v<version>` and `latest` images. The workflow fails if code changed since the existing `v<version>` tag, because that code would otherwise go unreleased. If a release run fails, use "Re-run failed jobs" on it.
+
+A pull request that changes code must bump the version in `proxy/Cargo.toml`. The version check workflow fails the pull request otherwise. Do not create or push tags by hand.
