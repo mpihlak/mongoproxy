@@ -1,0 +1,31 @@
+name: Version check
+
+on:
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  version-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a new version for code changes
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          if [ -z "$(.github/scripts/code-changes.sh "$BASE...HEAD")" ]; then
+            echo "Only docs or CI changed, no version bump needed"
+            exit 0
+          fi
+
+          base_version=$(.github/scripts/version.sh "$BASE")
+          version=$(.github/scripts/version.sh)
+          highest=$(printf '%s\n' "$base_version" "$version" | sort -V | tail -1)
+          if [ "$version" = "$base_version" ] || [ "$highest" != "$version" ]; then
+            echo "::error file=proxy/Cargo.toml::Bump the version in proxy/Cargo.toml above $base_version (currently $version). Merging to master releases v<version>."
+            exit 1
+          fi
+          echo "Merging releases v$version"
