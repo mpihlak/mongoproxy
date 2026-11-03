@@ -9,7 +9,7 @@ use tokio::sync::mpsc::{self, Sender};
 use tokio::task::JoinSet;
 
 use prometheus::{CounterVec,HistogramVec,Encoder,TextEncoder};
-use clap::{Arg, App, crate_version};
+use clap::{Arg, ArgAction, Command, crate_version};
 use tracing::{info, warn, error, debug, info_span, Instrument, Level};
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use lazy_static::lazy_static;
@@ -81,49 +81,42 @@ lazy_static! {
 
 #[tokio::main]
 async fn main() {
-    let matches = App::new("mongoproxy")
+    let matches = Command::new("mongoproxy")
         .version(crate_version!())
         .about("Proxies MongoDb requests to obtain metrics")
-        .arg(Arg::with_name("proxy")
+        .arg(Arg::new("proxy")
             .long("proxy")
             .value_name("local-port[:remote-host:remote-port]")
             .help("Port the proxy listens on (sidecar) and optionally\na target hostport (for static proxy)")
-            .takes_value(true)
             .required(true))
-        .arg(Arg::with_name("log_mongo_messages")
+        .arg(Arg::new("log_mongo_messages")
             .long("log-mongo-messages")
             .help("Log the contents of MongoDb messages (adds full BSON parsing)")
-            .takes_value(false)
-            .required(false))
-        .arg(Arg::with_name("enable_jaeger")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("enable_jaeger")
             .long("enable-jaeger")
             .help("Enable distributed tracing with Jaeger")
-            .takes_value(false)
-            .required(false))
-        .arg(Arg::with_name("jaeger_addr")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("jaeger_addr")
             .long("jaeger-addr")
             .value_name("Jaeger agent host:port")
-            .help("Jaeger agent hostport to send traces to (compact thrift protocol)")
-            .takes_value(true)
-            .required(false))
-        .arg(Arg::with_name("service_name")
+            .help("Jaeger agent hostport to send traces to (compact thrift protocol)"))
+        .arg(Arg::new("service_name")
             .long("service-name")
             .value_name("SERVICE_NAME")
-            .help("Service name that will be used in Jaeger traces and metric labels")
-            .takes_value(true))
-        .arg(Arg::with_name("admin_port")
+            .help("Service name that will be used in Jaeger traces and metric labels"))
+        .arg(Arg::new("admin_port")
             .long("admin-port")
             .value_name("ADMIN_PORT")
-            .help(&format!("Port the admin endpoints listens on (metrics and health). Default {}", ADMIN_PORT))
-            .takes_value(true))
+            .help(format!("Port the admin endpoints listens on (metrics and health). Default {}", ADMIN_PORT)))
         .get_matches();
 
-    let admin_port = matches.value_of("admin_port").unwrap_or(ADMIN_PORT);
+    let admin_port = matches.get_one::<String>("admin_port").map_or(ADMIN_PORT, String::as_str);
     let admin_addr = format!("0.0.0.0:{}", admin_port);
-    let service_name = matches.value_of("service_name").unwrap_or(SERVICE_NAME);
-    let log_mongo_messages = matches.occurrences_of("log_mongo_messages") > 0;
-    let enable_jaeger = matches.occurrences_of("enable_jaeger") > 0;
-    let jaeger_addr = lookup_address(matches.value_of("jaeger_addr").unwrap_or(JAEGER_ADDR)).unwrap();
+    let service_name = matches.get_one::<String>("service_name").map_or(SERVICE_NAME, String::as_str);
+    let log_mongo_messages = matches.get_flag("log_mongo_messages");
+    let enable_jaeger = matches.get_flag("enable_jaeger");
+    let jaeger_addr = lookup_address(matches.get_one::<String>("jaeger_addr").map_or(JAEGER_ADDR, String::as_str)).unwrap();
 
     let (writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
     let subscriber = FmtSubscriber::builder()
@@ -142,7 +135,7 @@ async fn main() {
         .expect("failed to start admin listener");
     info!("Admin endpoint at http://{}", admin_addr);
 
-    let proxy_spec = matches.value_of("proxy").unwrap();
+    let proxy_spec = matches.get_one::<String>("proxy").unwrap();
     let (local_hostport, remote_hostport) = parse_proxy_addresses(proxy_spec).unwrap();
 
     let (tracer, _uninstall) = jaeger_tracing::init_tracer(enable_jaeger, service_name, jaeger_addr);
