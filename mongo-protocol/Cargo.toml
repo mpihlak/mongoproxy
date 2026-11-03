@@ -9,7 +9,7 @@ default = [ "tokio/io-util", "tokio/macros" ]
 
 [dependencies]
 tracing = "0.1"
-prometheus = "0.7"
+prometheus = "0.14"
 lazy_static = "1.4"
 bson = "3.1"
 byteorder = "1.3"
