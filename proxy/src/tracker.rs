@@ -370,6 +370,12 @@ impl ClientRequest {
     fn is_collection_op(&self) -> bool {
         !self.coll.is_empty()
     }
+
+    fn set_span_attribute(&self, attribute: KeyValue) {
+        if let Some(span) = &self.span {
+            span.set_attribute(attribute);
+        }
+    }
 }
 
 pub struct MongoStatsTracker {
@@ -590,6 +596,8 @@ impl MongoStatsTracker{
                 .observe(client_request.message_length as f64);
         }
 
+        client_request.set_span_attribute(KeyValue::new("db.response_size", hdr.message_length as i64));
+
         // Look into the server response and exract some counters from it.
         // Things like number of documents returned, inserted, updated, deleted.
         // The only interesting messages here are OP_MSG and OP_REPLY.
@@ -619,9 +627,7 @@ impl MongoStatsTracker{
 
             if let Some(ok) = section.get_float("ok") {
                 if ok == 0.0 {
-                    if let Some(span) = &mut client_request.span {
-                        span.set_attribute(KeyValue::new("error", true));
-                    }
+                    client_request.set_span_attribute(KeyValue::new("error", true));
                     SERVER_RESPONSE_ERRORS_TOTAL
                         .with_label_values(&self.label_values(client_request))
                         .inc();
@@ -658,10 +664,10 @@ impl MongoStatsTracker{
             debug!("client_request: op={} coll={} n_docs_returned={:?} n_docs_changed={:?} n_docs_matched={:?}",
                 client_request.op, client_request.coll, n_docs_returned, n_docs_changed, n_docs_matched);
 
+            client_request.set_span_attribute(KeyValue::new("db.request_size", client_request.message_length as i64));
+
             if let Some(n) = n_docs_returned {
-                if let Some(span) = &mut client_request.span {
-                    span.set_attribute(KeyValue::new("db.documents_returned", n as i64));
-                }
+                client_request.set_span_attribute(KeyValue::new("db.documents_returned", n as i64));
                 if client_request.is_collection_op() {
                     DOCUMENTS_RETURNED_TOTAL
                         .with_label_values(&self.label_values(client_request))
@@ -670,22 +676,18 @@ impl MongoStatsTracker{
             }
 
             if let Some(n) = n_docs_matched {
-                if let Some(span) = &mut client_request.span {
-                    span.set_attribute(KeyValue::new("db.documents_matched", n as i64));
-                    if n_docs_changed.is_none() {
-                        // This must have been a NOP update operation so let's make it explicit
-                        // that nothing was actually updated so that it gets recording in the
-                        // traces. We don't probably care about this as a metric, so leave it out
-                        // for now.
-                        n_docs_changed = Some(0);
-                    }
+                client_request.set_span_attribute(KeyValue::new("db.documents_matched", n as i64));
+                if n_docs_changed.is_none() {
+                    // This must have been a NOP update operation so let's make it explicit
+                    // that nothing was actually updated so that it gets recording in the
+                    // traces. We don't probably care about this as a metric, so leave it out
+                    // for now.
+                    n_docs_changed = Some(0);
                 }
             }
 
             if let Some(n) = n_docs_changed {
-                if let Some(span) = &mut client_request.span {
-                    span.set_attribute(KeyValue::new("db.documents_changed", n as i64));
-                }
+                client_request.set_span_attribute(KeyValue::new("db.documents_changed", n as i64));
                 if client_request.is_collection_op() {
                     DOCUMENTS_CHANGED_TOTAL
                         .with_label_values(&self.label_values(client_request))

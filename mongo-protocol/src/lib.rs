@@ -12,6 +12,15 @@ use prometheus::{CounterVec, GaugeVec};
 
 pub const HEADER_LENGTH: usize = 16;
 
+// A read buffer that had to grow past this many times its initial size to fit one
+// message is replaced with a fresh one once that message is processed. Otherwise every
+// connection would hold on to a buffer the size of the largest message it has ever
+// carried (up to 48MB) for as long as the connection lives.
+const MAX_RETAINED_BUFFER_FACTOR: usize = 4;
+
+// MongoDb's maxMessageSizeBytes. Used to cap how much buffer is reserved up front based
+// on the (untrusted) message length in the header.
+const MAX_MESSAGE_SIZE: usize = 48_000_000;
 
 lazy_static! {
     static ref MONGO_DOC_PARSER: DocumentParser<'static> =
@@ -143,6 +152,7 @@ impl std::error::Error for ProxyError {}
 pub struct MongoMessageProxy {
     log_mongo_messages: bool,
     collect_tracing_data: bool,
+    read_buffer_size: usize,
     buf: bytes::BytesMut,
 }
 
@@ -152,7 +162,18 @@ impl MongoMessageProxy {
         Self {
             log_mongo_messages,
             collect_tracing_data,
+            read_buffer_size,
             buf: bytes::BytesMut::with_capacity(read_buffer_size),
+        }
+    }
+
+    // Give back the memory of a buffer that grew to fit a large message. The parsed
+    // message does not borrow from the buffer, so it can be dropped as soon as the
+    // message has been forwarded and parsed.
+    fn release_oversized_buffer(&mut self) {
+        if self.buf.capacity() > self.read_buffer_size * MAX_RETAINED_BUFFER_FACTOR {
+            debug!("Releasing read buffer of {} bytes", self.buf.capacity());
+            self.buf = bytes::BytesMut::with_capacity(self.read_buffer_size);
         }
     }
 
@@ -211,6 +232,9 @@ impl MongoMessageProxy {
         // any unprocessed bytes.
         let message_length = hdr.message_length - HEADER_LENGTH;
         self.buf.clear();
+        // Size the buffer for the whole message at once instead of letting it double its
+        // way up, which leaves up to 2x the message size allocated and copies it each time.
+        self.buf.reserve(message_length.min(MAX_MESSAGE_SIZE));
         while self.buf.len() < message_length {
             let remaining_bytes = (message_length - self.buf.len()) as u64;
             let len = reader.take(remaining_bytes).read_buf(&mut self.buf)
@@ -234,10 +258,9 @@ impl MongoMessageProxy {
                 ProxyError::IoError(e)
             })?;
 
-        READ_BUFFER_SIZE.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
-        READ_BUFFER_CAPACITY.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
+        READ_BUFFER_SIZE.with_label_values(&[read_source]).set(self.buf.len() as f64);
 
-        match MongoMessage::extract_message(
+        let result = match MongoMessage::extract_message(
             hdr.op_code,
             &mut &self.buf[..],
             self.log_mongo_messages,
@@ -252,7 +275,12 @@ impl MongoMessageProxy {
                 MESSAGE_PARSE_ERRORS_COUNTER.with_label_values(&[read_source, &e.to_string()]).inc();
                 Err(ProxyError::ParserFailed)
             }
-        }
+        };
+
+        self.release_oversized_buffer();
+        READ_BUFFER_CAPACITY.with_label_values(&[read_source]).set(self.buf.capacity() as f64);
+
+        result
     }
 }
 
@@ -1088,6 +1116,54 @@ mod tests {
                 },
             }
         }
+    }
+
+    // A large message must not leave a large read buffer behind for the rest of the
+    // connection's life.
+    #[traced_test]
+    #[tokio::test]
+    async fn test_large_message_buffer_is_released() {
+        let read_buffer_size = 1024;
+        let mut buf = Vec::new();
+
+        for (i, payload_len) in [1024 * 1024, 10].iter().enumerate() {
+            let mut msg_buf = Vec::new();
+            msg_buf.write_i32::<LittleEndian>(0i32).unwrap();   // flag bits
+            msg_buf.write_u8(0).unwrap();                       // section type=0
+            let doc = doc! { "insert": "big", "payload": "x".repeat(*payload_len) };
+            doc.to_writer(&mut msg_buf).unwrap();
+
+            let hdr = MsgHeader {
+                message_length: HEADER_LENGTH + msg_buf.len(),
+                request_id: i as u32 + 1,
+                response_to: 0,
+                op_code: 2013,
+            };
+            hdr.write(&mut buf).unwrap();
+            buf.extend(&msg_buf);
+        }
+
+        let input = buf.clone();
+        let mut cur = std::io::Cursor::new(buf);
+        let mut out = Vec::new();
+        let mut message_proxy = MongoMessageProxy::new(read_buffer_size, false, false);
+
+        for _ in 0..2 {
+            let (_, msg) = message_proxy.proxy_mongo_message("server", &mut cur, &mut out).await.unwrap();
+            match msg {
+                MongoMessage::Msg(op_msg) => {
+                    assert_eq!("insert", op_msg.documents[0].get_str("op").unwrap());
+                },
+                _ => {
+                    panic!("expecting MsgOpMsg");
+                },
+            }
+            assert!(message_proxy.buf.capacity() <= read_buffer_size * MAX_RETAINED_BUFFER_FACTOR,
+                "read buffer kept {} bytes after the message", message_proxy.buf.capacity());
+        }
+
+        // Expect all bytes to have been proxied unchanged
+        assert_eq!(input, out);
     }
 
     #[test]
