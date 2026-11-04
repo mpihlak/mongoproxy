@@ -1,6 +1,6 @@
 use std::sync::{Arc,Mutex};
 
-use crate::jaeger_tracing::Tracer;
+use crate::trace_propagation::Tracer;
 use crate::tracker::CursorTraceMapper;
 
 #[derive(Clone,Debug)]

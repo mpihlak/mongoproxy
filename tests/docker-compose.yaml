@@ -6,7 +6,7 @@ services:
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info
-    command: ./mongoproxy --proxy 27111:mongodb-i9n-test:27017 --enable-jaeger --jaeger-addr jaeger-i9n-test:6831 --log-mongo-messages
+    command: ./mongoproxy --proxy 27111:mongodb-i9n-test:27017 --enable-otlp --otlp-endpoint http://otel-collector-i9n-test:4317 --log-mongo-messages
     ports:
       - "9898:9898"
       - "27111:27111"
@@ -26,11 +26,14 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  otel-collector:
+    container_name: otel-collector-i9n-test
+    image: otel/opentelemetry-collector:0.164.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml
   jaeger:
     container_name: jaeger-i9n-test
-    image: jaegertracing/all-in-one:1.8
-    logging:
-      driver: none
+    image: jaegertracing/jaeger:2.22.0
     ports:
-      - "6831:6831/udp"
       - "16686:16686"

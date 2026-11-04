@@ -8,7 +8,6 @@ COPY Cargo.* ./
 COPY proxy/ ./proxy
 COPY mongo-protocol/ ./mongo-protocol
 COPY async-bson/ ./async-bson
-COPY .cargo/ ./.cargo
 
 RUN cargo build
 
