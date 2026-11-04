@@ -1,6 +1,6 @@
 use mongo_protocol::{MsgHeader,MongoMessage,MsgOpMsg,ResponseDocuments};
 use tokio::sync::mpsc::Receiver;
-use crate::jaeger_tracing;
+use crate::trace_propagation;
 use crate::appconfig::AppConfig;
 
 use std::time::Instant;
@@ -11,8 +11,8 @@ use prometheus::{Counter, CounterVec, Gauge, HistogramVec};
 
 use opentelemetry::trace::{Tracer, SpanKind, TraceContextExt};
 use opentelemetry::trace::Span as _Span;
-use opentelemetry::sdk::trace::Span;
-use opentelemetry::KeyValue;
+use opentelemetry::{Context, KeyValue};
+use opentelemetry_sdk::trace::Span;
 
 use async_bson::Document;
 
@@ -129,7 +129,7 @@ lazy_static! {
 //
 // XXX: If the cursor id's are not unique within a MongoDb instance then there's
 // a risk of collision if there are multiple databases on the same server.
-pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), opentelemetry::Context>;
+pub type CursorTraceMapper = HashMap<(std::net::SocketAddr,i64), Context>;
 
 pub type TrackerMessage = (MsgHeader, MongoMessage);
 
@@ -313,10 +313,9 @@ impl ClientRequest {
                 // trace_mapper just yet. Unfortunately we only get the cursor id in the response
                 // document of the first "find", so that's where we put add it to the trace_mapper.
 
-                let span = tracer.span_builder(op)
-                    .with_parent_context(parent_span_ctx.clone())
+                let span = tracer.span_builder(op.to_owned())
                     .with_kind(SpanKind::Server)
-                    .start(tracer);
+                    .start_with_context(tracer, parent_span_ctx);
                 debug!("Started getMore span: {:?}", span.span_context());
 
                 return Some((cursor, span));
@@ -325,7 +324,7 @@ impl ClientRequest {
             // Otherwise we look up the parent trace id from the $comment field of
             // the query.
 
-            let parent = match jaeger_tracing::extract_from_text(comment) {
+            let parent = match trace_propagation::extract_from_text(comment) {
                 Some(parent) => parent,
                 _ => {
                     debug!("No trace id found in $comment");
@@ -334,9 +333,8 @@ impl ClientRequest {
             };
 
             debug!("Extracted trace header: {:?}", parent);
-            let span = tracer
-                .span_builder(op)
-                .with_parent_context(parent)
+            let mut span = tracer
+                .span_builder(op.to_owned())
                 .with_kind(SpanKind::Server)
                 .with_attributes(vec![
                     KeyValue::new("db.mongodb.collection", coll.to_owned()),
@@ -346,7 +344,7 @@ impl ClientRequest {
                     KeyValue::new("db.server.addr", tracker.server_addr.clone()),
                     KeyValue::new("db.client.app", tracker.client_application.clone()),
                 ])
-                .start(tracer);
+                .start_with_context(tracer, &parent);
             debug!("Started initial span: {:?}", span.span_context());
 
             // Tag the span with all the documents in the message. This will give
@@ -371,8 +369,8 @@ impl ClientRequest {
         !self.coll.is_empty()
     }
 
-    fn set_span_attribute(&self, attribute: KeyValue) {
-        if let Some(span) = &self.span {
+    fn set_span_attribute(&mut self, attribute: KeyValue) {
+        if let Some(span) = &mut self.span {
             span.set_attribute(attribute);
         }
     }
@@ -732,7 +730,7 @@ impl MongoStatsTracker{
                         debug!("Saving parent trace for cursor_id={}", cursor_id);
                         let mut trace_mapper = self.app.trace_mapper.lock().unwrap();
 
-                        let cx = opentelemetry::Context::current_with_span(span.clone());
+                        let cx = Context::new().with_remote_span_context(span.span_context().clone());
 
                         trace_mapper.insert((self.server_addr_sa, cursor_id), cx);
                         CURSOR_TRACE_PARENT_HASHMAP_CAPACITY.set(trace_mapper.capacity() as f64);

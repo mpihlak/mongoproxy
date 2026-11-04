@@ -23,7 +23,7 @@ use hyper::{body::Incoming, service::service_fn, Method, Request, Response, Stat
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 
-use mongoproxy::jaeger_tracing;
+use mongoproxy::trace_propagation;
 use mongoproxy::dstaddr;
 use mongoproxy::appconfig::AppConfig;
 use mongoproxy::tracker::{MongoStatsTracker, TrackerMessage};
@@ -31,7 +31,6 @@ use mongoproxy::tracker::{MongoStatsTracker, TrackerMessage};
 use mongo_protocol::{MongoMessageProxy, ProxyError};
 
 
-const JAEGER_ADDR: &str = "127.0.0.1:6831";
 const ADMIN_PORT: &str = "9898";
 const SERVICE_NAME: &str = "mongoproxy";
 
@@ -48,7 +47,7 @@ lazy_static! {
         register_counter_vec!(
             "mongoproxy_runtime_info",
             "Runtime information about Mongoproxy",
-            &["version", "proxy", "service_name", "log_mongo_messages", "enable_jaeger"]).unwrap();
+            &["version", "proxy", "service_name", "log_mongo_messages", "enable_otlp"]).unwrap();
 
     static ref CONNECTION_COUNT_TOTAL: CounterVec =
         register_counter_vec!(
@@ -95,18 +94,19 @@ async fn main() {
             .long("log-mongo-messages")
             .help("Log the contents of MongoDb messages (adds full BSON parsing)")
             .action(ArgAction::SetTrue))
-        .arg(Arg::new("enable_jaeger")
-            .long("enable-jaeger")
-            .help("Enable distributed tracing with Jaeger")
+        .arg(Arg::new("enable_otlp")
+            .long("enable-otlp")
+            .help("Enable distributed tracing, export spans with OTLP")
             .action(ArgAction::SetTrue))
-        .arg(Arg::new("jaeger_addr")
-            .long("jaeger-addr")
-            .value_name("Jaeger agent host:port")
-            .help("Jaeger agent hostport to send traces to (compact thrift protocol)"))
+        .arg(Arg::new("otlp_endpoint")
+            .long("otlp-endpoint")
+            .value_name("[http://]host:port")
+            .requires("enable_otlp")
+            .help("OTLP gRPC collector endpoint. Default from OTEL_EXPORTER_OTLP_TRACES_ENDPOINT\nor OTEL_EXPORTER_OTLP_ENDPOINT, otherwise http://localhost:4317"))
         .arg(Arg::new("service_name")
             .long("service-name")
             .value_name("SERVICE_NAME")
-            .help("Service name that will be used in Jaeger traces and metric labels"))
+            .help("Service name that will be used in traces and metric labels"))
         .arg(Arg::new("admin_port")
             .long("admin-port")
             .value_name("ADMIN_PORT")
@@ -117,8 +117,8 @@ async fn main() {
     let admin_addr = format!("0.0.0.0:{}", admin_port);
     let service_name = matches.get_one::<String>("service_name").map_or(SERVICE_NAME, String::as_str);
     let log_mongo_messages = matches.get_flag("log_mongo_messages");
-    let enable_jaeger = matches.get_flag("enable_jaeger");
-    let jaeger_addr = lookup_address(matches.get_one::<String>("jaeger_addr").map_or(JAEGER_ADDR, String::as_str)).unwrap();
+    let enable_otlp = matches.get_flag("enable_otlp");
+    let otlp_endpoint = matches.get_one::<String>("otlp_endpoint").map(String::as_str);
 
     let (writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
     let subscriber = FmtSubscriber::builder()
@@ -140,7 +140,8 @@ async fn main() {
     let proxy_spec = matches.get_one::<String>("proxy").unwrap();
     let (local_hostport, remote_hostport) = parse_proxy_addresses(proxy_spec).unwrap();
 
-    let (tracer, _uninstall) = jaeger_tracing::init_tracer(enable_jaeger, service_name, jaeger_addr);
+    let tracer = trace_propagation::init_tracer(enable_otlp, service_name, otlp_endpoint)
+        .expect("failed to initialize OTLP exporter");
 
     let app = AppConfig::new(
         tracer,
@@ -152,7 +153,7 @@ async fn main() {
         proxy_spec,
         service_name,
         if log_mongo_messages { "true" } else { "false" },
-        if enable_jaeger { "true" } else { "false" } ],
+        if enable_otlp { "true" } else { "false" } ],
     ).inc();
 
     run_accept_loop(local_hostport, remote_hostport, app).await;

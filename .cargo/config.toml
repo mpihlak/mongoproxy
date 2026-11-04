@@ -1,4 +1,0 @@
-# opentelemetry-jaeger 0.11 registers a blocking UDP socket with tokio, which debug
-# builds of tokio reject. Remove after upgrading opentelemetry.
-[build]
-rustflags = ["--cfg", "tokio_allow_from_blocking_fd"]

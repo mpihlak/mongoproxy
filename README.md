@@ -1,5 +1,5 @@
 # Mongoproxy the Observable
-There are many MongoDb proxies, but this one is about observability. It passes bytes between client and the server and records query latencies, response sizes, document counts and exposes them as Prometheus metrics. It also does Jaeger tracing if the client passes a trace id in the `$comment` field of the operation.
+There are many MongoDb proxies, but this one is about observability. It passes bytes between client and the server and records query latencies, response sizes, document counts and exposes them as Prometheus metrics. It also does distributed tracing if the client passes a trace id in the `$comment` field of the operation.
 
 All bytes are passed through unchanged. Furthermore, the metrics processing is decoupled from the proxying so that latency or bugs in the metrics processor have no impact on moving the bytes.
 
@@ -9,7 +9,7 @@ bits from the stream.
 ## Current state
 Supports MongoDb 3.6 and greater (`OP_MSG` protocol), and produces throughput and latency metrics both at the network and document level. The legacy `OP_COMMAND` protocol used by some drivers and older Mongo versions is not fully supported. The proxy won't crash or anything but the collected metrics will be limited.
 
-Jaeger tracing is supported for `OP_MSG` protocol (sorry, no legacy clients) and only for operations that support `$comment` strings.
+Tracing is supported for `OP_MSG` protocol (sorry, no legacy clients) and only for operations that support `$comment` strings.
 
 Performance is good. Expect to add just few millicores for the proxy process and < 10 MB of memory used. The actual numbers depend on the workload.
 
@@ -34,17 +34,17 @@ Note that this mode does not automatically support replica sets, as replicaset c
 
 `iptables -t nat -A PREROUTING -i ${IFACE} -p tcp --dport ${MONGO_PORT} -j REDIRECT --to-port ${PROXY_PORT}`
 
-### With Jaeger tracing
+### With tracing
 ```
 mongoproxy --proxy 27113:localhost:27017 \
     --service-name mongoproxy-ftw \
-    --enable-jaeger \
-    --jaeger-addr localhost:6831
+    --enable-otlp \
+    --otlp-endpoint http://localhost:4317
 ```
 
-Same as above but with Jaeger tracing enabled. Spans will be sent to collector on `localhost:6831`. The service name for the traces is set to `mongoproxy-ftw`.
+Same as above but with tracing enabled. Spans are sent with OTLP over gRPC to `http://localhost:4317`, which can be an OpenTelemetry Collector or Jaeger. An endpoint without a scheme means `http://`. Without `--otlp-endpoint` the endpoint comes from `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`, and defaults to `http://localhost:4317`. TLS is not supported. The service name for the traces is set to `mongoproxy-ftw`.
 
-Running with `--enable-jaeger` adds some overhead as the full query text is parsed and tagged to the trace. 
+Running with `--enable-otlp` adds some overhead as the full query text is parsed and tagged to the trace. 
 
 ### Other tips
 More verbose logging can be enabled by specifying `RUST_LOG` level as `info` or `debug`. Add `RUST_BACKTRACE=1` for troubleshooting those (rare) crashes.
@@ -76,7 +76,12 @@ Example:
 ![Metrics example](https://github.com/mpihlak/mongoproxy/blob/master/img/metrics.png)
 
 ## Tracing
-Mongoproxy will not create tracing spans unless the application explicitly requests it. The application does this by passing the trace id in the `$comment` field of the MongoDb query. So, for example if a `find` operation has `uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1` in the comment, the proxy picks this up and will create a child span for the `find` operation. Like this:
+Mongoproxy will not create tracing spans unless the application explicitly requests it. The application does this by passing the trace id in the `$comment` field of the MongoDb query. The comment holds one trace id, in either format:
+
+* W3C Trace Context: `traceparent:00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`
+* Jaeger: `uber-trace-id:6d697c0f076183c:6d697c0f076183c:0:1`
+
+For example, if a `find` operation has one of these in the comment, the proxy creates a child span for the `find` operation. The proxy creates no span if the parent is not sampled. Like this:
 
 ![Trace example](https://github.com/mpihlak/mongoproxy/blob/master/img/trace.png)
 
